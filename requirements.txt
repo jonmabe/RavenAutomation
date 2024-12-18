@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+websockets
+python-dotenv
+openai
+pyaudio
+scipy
+aioconsole
+numpy
