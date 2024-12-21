@@ -1,0 +1,12 @@
+# Virtual Environment
+venv/
+env/
+.env/
+.venv/
+ENV/
+
+# Logs
+logs/
+
+# Other
+.DS_Store
