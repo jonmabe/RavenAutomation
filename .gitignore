@@ -10,3 +10,4 @@ logs/
 
 # Other
 .DS_Store
+__pycache__/

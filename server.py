@@ -41,6 +41,10 @@ class AudioProcessor:
         self.MIN_SPEECH_FRAMES = 10
         self.CHUNK = 480  # 30ms at 16kHz for WebRTC VAD
         self.RATE = 16000  # WebRTC VAD requires 16kHz
+        
+        # Animation state
+        self.last_animation_position = 0.0
+        self.animation_chunk_count = 0
 
     def process_audio(self, audio_data, original_rate=24000):
         try:
@@ -92,6 +96,120 @@ class AudioProcessor:
             logger.error(traceback.format_exc())
             return None, False
 
+    def generate_animation_sequence(self, audio_data, original_rate=24000):
+        """Generate animation sequence from audio data"""
+        try:
+            # Convert bytes to numpy array
+            audio_array = np.frombuffer(audio_data, dtype=np.int16)
+            
+            # Calculate total duration of audio in ms
+            total_duration_ms = (len(audio_array) / original_rate) * 1000
+            
+            # If audio is shorter than 250ms, just create one animation frame
+            if total_duration_ms <= 250:
+                # Alternate based on previous state
+                self.last_animation_position = 1.0 if self.last_animation_position == 0.0 else 0.0
+                return [[self.last_animation_position, int(total_duration_ms)]]
+            
+            # Otherwise split into 250ms chunks
+            chunk_size = int(original_rate * 0.25)  # 250ms chunks
+            num_full_chunks = len(audio_array) // chunk_size
+            remainder_samples = len(audio_array) % chunk_size
+            
+            animation_sequence = []
+            
+            # Add full 250ms chunks
+            for i in range(num_full_chunks):
+                # Continue alternating pattern from previous state
+                position = 1.0 if (self.animation_chunk_count + i) % 2 == 0 else 0.0
+                animation_sequence.append([position, 250])
+            
+            # Add remaining partial chunk if any
+            if remainder_samples > 0:
+                remainder_duration_ms = int((remainder_samples / original_rate) * 1000)
+                if remainder_duration_ms > 0:
+                    position = 1.0 if (self.animation_chunk_count + num_full_chunks) % 2 == 0 else 0.0
+                    animation_sequence.append([position, remainder_duration_ms])
+            
+            # Update state for next call
+            self.animation_chunk_count += num_full_chunks + (1 if remainder_samples > 0 else 0)
+            if animation_sequence:
+                self.last_animation_position = animation_sequence[-1][0]
+            
+            return animation_sequence
+            
+        except Exception as e:
+            logger.error(f"Error generating animation: {e}")
+            logger.error(traceback.format_exc())
+            return []
+
+    async def handle_openai_responses():
+        """Handle responses from OpenAI and generate animations"""
+        while True:
+            try:
+                response = await openai_ws.recv()
+                response_data = json.loads(response)
+                response_type = response_data.get("type", "")
+                
+                if "audio.delta" in response_type:
+                    audio_base64 = response_data.get("delta", "")
+                    if audio_base64:
+                        raw_audio = base64.b64decode(audio_base64)
+                        
+                        # Generate animation sequence
+                        animation_sequence = self.generate_animation_sequence(raw_audio)
+                        logger.debug(f"Generated animation sequence: {animation_sequence}")
+                        
+                        # Send animation sequence before audio
+                        if animation_sequence:
+                            await websocket.send(json.dumps({
+                                "type": "animation.sequence",
+                                "sequence": animation_sequence
+                            }))
+                        
+                        # Send audio
+                        audio_array = np.frombuffer(raw_audio, dtype=np.int16)
+                        audio_data = audio_array.astype('<i2').tobytes()
+                        await websocket.send_bytes(audio_data)
+                        
+                elif response_type == "response.done":
+                    await websocket.send(json.dumps({
+                        "type": "response.done"
+                    }))
+                    
+                # Handle other response types as before...
+                
+            except Exception as e:
+                logger.error(f"Error processing OpenAI response: {e}")
+                logger.error(traceback.format_exc())
+                break
+
+class OpenAIProxy:
+    def __init__(self):
+        self.system_prompt = """You are a witty parrot pirate who loves to playfully tease humans. Keep your responses brief and punchy, 
+        and try to work in clever observations about the person you're talking to. You should:
+        - Speak like a pirate, but don't overdo it with the "arr matey" stuff
+        - Make cheeky, lighthearted jokes about what the person says or how they say it
+        - Keep your responses fairly short (1-3 sentences when possible)
+        - Occasionally squawk or make parrot noises (SQUAWK!, *ruffles feathers*)
+        - Be mischievous but friendly
+        - Try to work in bird/pirate puns when you can
+        - Comment on their speech patterns, accent, or way of talking
+        - Make playful observations about their vocabulary or speaking style
+
+        Example responses:
+        "SQUAWK! Ye speak slower than a snail climbing the mast, but I'll wait *preens feathers*"
+        "Crackers and doubloons! That's the most landlubber way of putting it I've ever heard!"
+        "*tilts head* For someone trying to sound smart, you're making this old bird's brain hurt!"
+        "Aye, I've heard more confident speeches from a seasick sailor! *flutters wings playfully*"
+        """
+
+        self.messages = [
+            {"role": "system", "content": self.system_prompt}
+        ]
+        
+        # Rest of initialization code...
+
 @app.websocket("/proxy-openai")
 async def proxy_openai(websocket: WebSocket):
     await websocket.accept()
@@ -112,14 +230,20 @@ async def proxy_openai(websocket: WebSocket):
             await openai_ws.send(json.dumps({
                 "type": "session.update",
                 "session": {
-                    "voice": "alloy",
-                    "instructions": """You are a helpful AI assistant. 
-                        Maintain context throughout the conversation. 
-                        Respond in the same language the user speaks to you in.
-                        If the user hasn't spoken yet, use English.""",
+                    "voice": "fable",
+                    "instructions": """You are a witty parrot pirate who loves to playfully tease humans. Keep your responses brief and punchy, 
+                    and try to work in clever observations about the person you're talking to. You should:
+                    - Speak like a pirate, but don't overdo it with the "arr matey" stuff
+                    - Make cheeky, lighthearted jokes about what the person says or how they say it
+                    - Keep your responses fairly short (1-3 sentences when possible)
+                    - Occasionally squawk or make parrot noises (SQUAWK!, *ruffles feathers*)
+                    - Be mischievous but friendly
+                    - Try to work in bird/pirate puns when you can
+                    - Comment on their speech patterns, accent, or way of talking
+                    - Make playful observations about their vocabulary or speaking style""",
                     "input_audio_transcription": {
                         "model": "whisper-1",
-                        "language": "en"  # Default to English but Whisper will auto-detect
+                        "language": "en"
                     },
                     "output_audio_format": "pcm16",
                     "output_audio_rate": 24000,
@@ -130,8 +254,8 @@ async def proxy_openai(websocket: WebSocket):
                         "silence_duration_ms": 600,
                         "create_response": True
                     },
-                    "temperature": 0.7,  # Add temperature to make responses more consistent
-                    "conversation_history_limit": 10  # Maintain conversation history
+                    "temperature": 0.9,  # Increased for more creative responses
+                    "conversation_history_limit": 10
                 }
             }))
             
@@ -175,45 +299,59 @@ async def proxy_openai(websocket: WebSocket):
                         logger.error(traceback.format_exc())
                         break
 
-            async def handle_openai_responses():
-                while True:
-                    try:
-                        response = await openai_ws.recv()
-                        response_data = json.loads(response)
-                        response_type = response_data.get("type", "")
-                        logger.info(f"Got response type: {response_type}")
-                        
-                        # Log transcript deltas to see what OpenAI is hearing
-                        if "audio_transcript" in response_type:
-                            delta = response_data.get("delta", "")
-                            if delta:
-                                logger.info(f"Transcript: {delta}")
-                        
-                        if "audio.delta" in response_type:
-                            audio_base64 = response_data.get("delta", "")
-                            if audio_base64:
-                                raw_audio = base64.b64decode(audio_base64)
-                                audio_array = np.frombuffer(raw_audio, dtype=np.int16)
-                                audio_data = audio_array.astype('<i2').tobytes()
-                                await websocket.send_bytes(audio_data)
-                                logger.info(f"Sent {len(audio_data)} bytes to client")
-                        
-                        elif response_type == "input_audio_buffer.speech_started":
-                            logger.info("Speech detected")
-                        elif response_type == "input_audio_buffer.speech_stopped":
-                            logger.info("Speech stopped")
-                        elif response_type == "response.done":
-                            logger.info("Response completed")
+            async def forward_from_openai():
+                try:
+                    while True:
+                        try:
+                            response = await openai_ws.recv()
+                            response_data = json.loads(response)
+                            response_type = response_data.get("type", "")
                             
-                    except Exception as e:
-                        logger.error(f"Error processing OpenAI response: {e}")
-                        logger.error(traceback.format_exc())
-                        break
+                            if "audio.delta" in response_type:
+                                audio_base64 = response_data.get("delta", "")
+                                if audio_base64:
+                                    raw_audio = base64.b64decode(audio_base64)
+                                    
+                                    # Convert audio to bytes
+                                    audio_array = np.frombuffer(raw_audio, dtype=np.int16)
+                                    audio_data = audio_array.astype('<i2').tobytes()
+                                    
+                                    # Send audio data
+                                    await websocket.send_json({
+                                        "type": "audio.animation",
+                                        "audio": base64.b64encode(audio_data).decode()
+                                    })
+                            
+                            elif response_type == "response.done":
+                                await websocket.send_json({
+                                    "type": "response.done"
+                                })
+                            else:
+                                # Forward other messages as-is
+                                await websocket.send_text(response)
+                                
+                        except websockets.exceptions.ConnectionClosedOK:
+                            logger.info("OpenAI connection closed normally")
+                            break
+                        except Exception as e:
+                            logger.error(f"Error in forward_from_openai loop: {e}")
+                            break
+                except Exception as e:
+                    logger.error(f"Error in forward_from_openai: {e}")
+                    logger.error(traceback.format_exc())
+                finally:
+                    # Always send done message when finishing
+                    try:
+                        await websocket.send_json({
+                            "type": "response.done"
+                        })
+                    except:
+                        pass
 
             # Run both handlers concurrently
             await asyncio.gather(
                 handle_client_messages(),
-                handle_openai_responses()
+                forward_from_openai()
             )
             
     except Exception as e:

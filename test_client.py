@@ -9,6 +9,8 @@ import json
 import webrtcvad
 from array import array
 from collections import deque
+from robot_driver import BottangoDriver
+import time
 
 class AudioClient:
     def __init__(self):
@@ -19,19 +21,63 @@ class AudioClient:
         self.p = pyaudio.PyAudio()
         self.running = True
         self.is_recording = False
+        self.is_speaking = False
+        self.audio_buffer = []  # Buffer to store audio segments
+        self.segment_size = 480  # 20ms at 24kHz
+        self.audio_buffer_length = 0
+        self.animation_resolution = 0.1
+
+
+        self.mouth_next_position = 0.0
+        self.mouth_current_position = 0.0
+        self.wing_next_position = 0.0
+        self.wing_current_position = 0.0
+        self.head_tilt_next_position = 0.0
+        self.head_tilt_current_position = 0.0
+        self.head_rotation_next_position = 0.0
+        self.head_rotation_current_position = 0.0
+        
+        # Animation parameters
+        self.last_idle_time = time.time()
+        self.idle_interval = 1.0  # Even more frequent movements
+        self.idle_variance = 0.8  # Less variance for more consistent movement
+        self.energy_smoothing = 0.7
+        self.last_energy = 0.0
+        
+        # Head movement state
+        self.head_looking_left = True  # Track head direction for alternating looks
+        self.head_movement_type = 'side'  # 'side' or 'tilt'
+        
+        # Initialize robot driver
+        self.robot = BottangoDriver()
+        if self.robot.initialize_servos():
+            print("Robot servos initialized successfully")
+        else:
+            print("Failed to initialize robot servos")
         
         # Find default input device
         self.input_device_index = self.get_default_input_device()
         
         # Initialize audio streams
         self.recording_stream = None
+        self.current_audio_data = None
+        self.audio_pos = 0
+        
+        # Audio playback state
+        self.audio_queue = deque()  # Queue for pending audio chunks
+        self.is_playing = False
+        
+        # Create playback stream with callback
         self.playback_stream = self.p.open(
             format=self.FORMAT,
             channels=self.CHANNELS,
             rate=self.RATE,
             output=True,
-            frames_per_buffer=self.CHUNK
+            frames_per_buffer=self.CHUNK,
+            stream_callback=self._audio_callback
         )
+        self.playback_stream.start_stream()
+
 
     def get_default_input_device(self):
         """Find the default input device index"""
@@ -91,11 +137,16 @@ class AudioClient:
         
         while self.running and self.is_recording:
             try:
+                # Don't send audio while the AI is speaking
+                if self.is_speaking:
+                    await asyncio.sleep(0.2)
+                    continue
+                
                 # Read audio data
                 audio_data = self.recording_stream.read(self.CHUNK, exception_on_overflow=False)
                 if audio_data:
                     # Send raw audio to server as binary message
-                    await self.ws.send(audio_data)  # websockets automatically handles binary data
+                    await self.ws.send(audio_data)
                     
                     bytes_sent += len(audio_data)
                     chunks_sent += 1
@@ -111,41 +162,209 @@ class AudioClient:
         
         print(f"\nStopped streaming. Total sent: {bytes_sent/1024:.2f}KB")
 
+    async def animation_loop(self):
+        """Main animation loop with parrot-like head movements"""
+        while self.running:
+            current_time = time.time()
+            
+            # Handle idle animations when not speaking
+            if not self.is_speaking:
+                if current_time - self.last_idle_time > self.idle_interval + np.random.uniform(0, self.idle_variance):
+                    # Alternate between side-to-side and up-down movements
+                    if np.random.random() < 0.7:  # 70% chance of side-to-side movement
+                        # Extreme side-to-side head rotation (parrot looking with alternate eyes)
+                        self.head_looking_left = not self.head_looking_left
+                        self.head_rotation_next_position = 0.9 if self.head_looking_left else 0.1
+                        # Slight tilt when looking sideways
+                        self.head_tilt_next_position = np.random.uniform(0.4, 0.6)
+                        self.head_movement_type = 'side'
+                    else:
+                        # Occasional up-down movement
+                        self.head_tilt_next_position = np.random.uniform(0.1, 0.9)  # More extreme tilt
+                        # Center rotation during tilt
+                        self.head_rotation_next_position = 0.5 + np.random.uniform(-0.1, 0.1)
+                        self.head_movement_type = 'tilt'
+
+                    # Wings move slightly with head movements
+                    self.wing_next_position = np.random.uniform(0.2, 0.4)  # Subtle wing adjustments
+                    
+                    self.last_idle_time = current_time
+                    self.idle_interval = 1.0 + np.random.uniform(-0.3, 0.3)  # Quick movements
+                
+                # Add micro-movements between major position changes
+                elif self.head_movement_type == 'side' and np.random.random() < 0.1:  # 10% chance each frame
+                    # Small adjustments to current position
+                    current_rotation = self.head_rotation_current_position
+                    self.head_rotation_next_position = current_rotation + np.random.uniform(-0.05, 0.05)
+                    self.head_tilt_next_position = self.head_tilt_current_position + np.random.uniform(-0.05, 0.05)
+            
+            # Apply current positions with quick head movements
+            if self.mouth_current_position != self.mouth_next_position:
+                self.robot.set_mouth(self.mouth_next_position)
+                self.mouth_current_position = self.mouth_next_position
+                
+            if self.wing_current_position != self.wing_next_position:
+                delta = self.wing_next_position - self.wing_current_position
+                self.wing_current_position += delta * 0.4
+                self.robot.set_wing(self.wing_current_position)
+                
+            if self.head_tilt_current_position != self.head_tilt_next_position:
+                delta = self.head_tilt_next_position - self.head_tilt_current_position
+                self.head_tilt_current_position += delta * 0.5  # Faster head tilt
+                self.robot.set_head_tilt(self.head_tilt_current_position)
+                
+            if self.head_rotation_current_position != self.head_rotation_next_position:
+                delta = self.head_rotation_next_position - self.head_rotation_current_position
+                self.head_rotation_current_position += delta * 0.5  # Faster rotation
+                self.robot.set_head_rotation(self.head_rotation_current_position)
+            
+            await asyncio.sleep(self.animation_resolution)
+
     async def receive_audio(self):
-        """Receive audio from server"""
+        """Receive audio and play it"""
         print("Starting audio receive loop")
+        
         while self.running:
             try:
                 message = await self.ws.recv()
-                if isinstance(message, bytes):
-                    print(f"\nReceived {len(message)} bytes of audio")
-                    self.playback_stream.write(message)
-                    print("Played audio chunk")
-                elif isinstance(message, str):
+                if isinstance(message, str):
                     msg_data = json.loads(message)
                     msg_type = msg_data.get("type", "")
-                    if "transcript" in msg_type:
-                        print(f"\nTranscript: {msg_data.get('delta', '')}")
-                    else:
-                        print(f"\nReceived message: {msg_type}")
+                    
+                    if msg_type == "audio.animation":
+                        self.is_speaking = True
+                        audio_data = base64.b64decode(msg_data["audio"])
+                        audio_length = len(audio_data)/self.RATE
+                        print(f"Queueing {audio_length:.3f}s of audio at {self.audio_buffer_length:.3f}s")
+                        
+                        # Add to queue or start playing if nothing is playing
+                        if self.is_playing:
+                            self.audio_queue.append(audio_data)
+                        else:
+                            self.current_audio_data = audio_data
+                            self.audio_pos = 0
+                            self.is_playing = True
+                        
+                        self.audio_buffer_length += audio_length
+                    elif msg_type == "response.done":
+                        pass
+                        
             except Exception as e:
                 print(f"\nError receiving audio: {e}")
                 traceback.print_exc()
+                self.is_speaking = False
+                self.robot.set_mouth(1.0)
                 break
 
     def cleanup(self):
-        """Clean up audio resources"""
+        """Clean up resources"""
         self.running = False
-        self.stop_recording()
+        self.is_speaking = False
+        
         if self.playback_stream:
             self.playback_stream.stop_stream()
             self.playback_stream.close()
+            
         self.p.terminate()
+        
+        # Reset mouth position
+        if hasattr(self, 'robot'):
+            self.robot._send_command_with_ok("sCI,27,0\n")
+
+    def _audio_callback(self, in_data, frame_count, time_info, status):
+        """Callback for audio playback"""
+        try:
+            if self.current_audio_data is not None:
+                self.is_speaking = True
+                # Calculate remaining bytes
+                remaining = len(self.current_audio_data) - self.audio_pos
+                
+                if remaining >= frame_count * 2:  # 2 bytes per sample
+                    # Get next chunk of audio
+                    output_data = self.current_audio_data[self.audio_pos:self.audio_pos + frame_count * 2]
+                    self.audio_pos += frame_count * 2
+                else:
+                    # Handle end of data
+                    output_data = self.current_audio_data[self.audio_pos:]
+                    
+                    # Check if there's more audio in the queue
+                    if self.audio_queue:
+                        self.current_audio_data = self.audio_queue.popleft()
+                        additional_data_length = frame_count * 2 - len(output_data) 
+                        if len(self.current_audio_data) > additional_data_length:
+                            output_data += self.current_audio_data[:additional_data_length]
+                            self.audio_pos = additional_data_length
+                        else:
+                            output_data += self.current_audio_data
+                            self.audio_pos = 0
+                        print(f"Starting next audio chunk ({len(self.current_audio_data)/self.RATE:.3f}s)")
+                    else:
+                        self.current_audio_data = None
+                        self.audio_pos = 0
+                        self.is_playing = False
+                        self.is_speaking = False # problem is that this is set to false before the last bit of audio is played
+                        print("Finished playing all audio")
+                
+                # Only calculate animations if we have valid output data
+                if output_data and len(output_data) > 0:
+                    self.calculate_animation_positions(output_data)
+
+                # Pad with silence if needed
+                output_data += b'\x00' * (frame_count * 2 - len(output_data)) # make sure we don't lose our callback loop. if we send back a frame shorter than the chunk size, we'll lose the callback loop
+
+                return (output_data, pyaudio.paContinue)
+            elif self.audio_queue:
+                # Start playing next chunk from queue
+                self.current_audio_data = self.audio_queue.popleft()
+                self.audio_pos = 0
+                self.is_playing = True
+                print(f"Starting new audio chunk ({len(self.current_audio_data)/self.RATE:.3f}s)")
+                return self._audio_callback(in_data, frame_count, time_info, status)
+            else:
+                # No data to play, return silence
+                self.is_speaking = False
+                return (b'\x00' * frame_count * 2, pyaudio.paContinue)
+                
+        except Exception as e:
+            print(f"Error in audio callback: {e}")
+            self.is_speaking = False
+            return (b'\x00' * frame_count * 2, pyaudio.paContinue)
+
+    def calculate_animation_positions(self, audio_data):
+        """Calculate next positions for all animated components"""
+        if not audio_data or len(audio_data) == 0:
+            return
+        
+        audio_array = np.frombuffer(audio_data, dtype=np.int16)
+        amplitude = np.percentile(np.abs(audio_array), 80)
+        
+        # Mouth animation (keep existing behavior)
+        self.mouth_next_position = np.random.uniform(0.0, 0.5) if amplitude > 800 else 1.0
+        
+        # Calculate energy level (0.0 to 1.0) with smoothing
+        current_energy = min(1.0, amplitude / 2000)  # Increased sensitivity (was 4000)
+        smoothed_energy = (current_energy * (1 - self.energy_smoothing) + 
+                         self.last_energy * self.energy_smoothing)
+        self.last_energy = smoothed_energy
+        
+        # Wings respond much more dramatically to energy
+        wing_energy = smoothed_energy * 1.2  # Increased from 0.7 for more dramatic movement
+        wing_base = 0.2  # Lower base position for more range
+        wing_random = np.random.uniform(-0.1, 0.1)  # Add some randomness
+        self.wing_next_position = wing_base + wing_energy * 0.8 + wing_random  # Increased range
+        self.wing_next_position = max(0.0, min(1.0, self.wing_next_position))  # Clamp values
+        
+        # Head tilt responds more subtly (keep as is)
+        tilt_energy = smoothed_energy * 0.3
+        self.head_tilt_next_position = 0.4 + tilt_energy * 0.6
+        
+        # Head rotation stays relatively still during speech
+        self.head_rotation_next_position = 0.5 + np.random.uniform(-0.1, 0.1)
 
 async def main():
-    client = AudioClient()
-    
+    client = AudioClient()  # No need for async context manager
     try:
+        animation_task = asyncio.create_task(client.animation_loop())
         await client.connect_websocket()
         receive_task = asyncio.create_task(client.receive_audio())
         
@@ -162,13 +381,18 @@ async def main():
             elif command.lower() == 'q':
                 break
                 
-        client.cleanup()
+        # Cancel receive task when done
         receive_task.cancel()
         try:
             await receive_task
         except asyncio.CancelledError:
             pass
-        await client.ws.close()
+        
+        animation_task.cancel()
+        try:
+            await animation_task
+        except asyncio.CancelledError:
+            pass
         
     except Exception as e:
         print(f"Error in main: {e}")
