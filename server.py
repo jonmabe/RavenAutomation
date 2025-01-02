@@ -223,41 +223,40 @@ async def proxy_openai(websocket: WebSocket):
         }
         
         async with websockets.connect(
-            "wss://api.openai.com/v1/realtime?protocol_version=2&model=gpt-4o-realtime-preview-2024-10-01",
+            "wss://api.openai.com/v1/realtime?protocol_version=2&model=gpt-4o-realtime-preview-2024-12-17",
             additional_headers=headers
         ) as openai_ws:
-            # Initial session configuration
-            await openai_ws.send(json.dumps({
+            session_config = {
                 "type": "session.update",
                 "session": {
-                    "voice": "fable",
+                    "modalities": ["text", "audio"],
+                    "voice": "ballad", # coral might be good too all options: 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', and 'verse'
                     "instructions": """You are a witty parrot pirate who loves to playfully tease humans. Keep your responses brief and punchy, 
                     and try to work in clever observations about the person you're talking to. You should:
                     - Speak like a pirate, but don't overdo it with the "arr matey" stuff
                     - Make cheeky, lighthearted jokes about what the person says or how they say it
                     - Keep your responses fairly short (1-3 sentences when possible)
-                    - Occasionally squawk or make parrot noises (SQUAWK!, *ruffles feathers*)
+                    - Occasionally squawk or make parrot noises
                     - Be mischievous but friendly
                     - Try to work in bird/pirate puns when you can
                     - Comment on their speech patterns, accent, or way of talking
                     - Make playful observations about their vocabulary or speaking style""",
-                    "input_audio_transcription": {
-                        "model": "whisper-1",
-                        "language": "en"
-                    },
                     "output_audio_format": "pcm16",
-                    "output_audio_rate": 24000,
                     "turn_detection": {
                         "type": "server_vad",
-                        "threshold": 0.5,
-                        "prefix_padding_ms": 300,
-                        "silence_duration_ms": 600,
+                        "threshold": 0.6,
+                        "prefix_padding_ms": 350,
+                        "silence_duration_ms": 650,
                         "create_response": True
                     },
                     "temperature": 0.9,  # Increased for more creative responses
-                    "conversation_history_limit": 10
                 }
-            }))
+            }
+            response = await openai_ws.recv()
+            logger.info(f"Connection open response: {response}")
+
+            # Initial session configuration
+            await openai_ws.send(json.dumps(session_config))
             
             # Wait for session to be ready
             response = await openai_ws.recv()
@@ -358,7 +357,7 @@ async def proxy_openai(websocket: WebSocket):
         logger.error(f"WebSocket error: {e}")
         logger.error(traceback.format_exc())
     finally:
-        logger.info(f"Connection closed. Processed {message_count} total messages")
+        logger.info(f"Connection closed.")
         await websocket.close()
 
 if __name__ == "__main__":
