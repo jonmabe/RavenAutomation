@@ -343,7 +343,7 @@ class AudioClient:
                 asyncio.create_task(self.animation_loop()),
                 asyncio.create_task(self.receive_from_openai()),
                 asyncio.create_task(self.manage_speaking_state()),
-                #asyncio.create_task(self.manage_autonomous_behaviors())
+                asyncio.create_task(self.manage_autonomous_behaviors())
             ]
             
             # Add process_microphone task only if using local microphone
