@@ -9,7 +9,7 @@ import json
 import time
 import uvicorn
 from typing import Set, Optional, List, Callable
-from server import OpenAIProxy  # Replace FastAPI WebSocket client with direct OpenAI proxy
+from openai import OpenAIProxy  # Replace FastAPI WebSocket client with direct OpenAI proxy
 from dataclasses import dataclass
 import random
 
@@ -31,7 +31,7 @@ class BehaviorManager:
         self.behaviors: List[ParrotBehavior] = [
             ParrotBehavior(
                 name="whistle",
-                prompt="Whistle like a parrot but don't say anything about it",
+                prompt="Whistle a short tune like a parrot but don't say anything about it",
                 frequency=0.7,
                 min_silence=5.0
             ),
