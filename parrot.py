@@ -15,7 +15,9 @@ import random
 
 # Global configuration
 USE_WEBSOCKET_AUDIO = True  # Control whether to use websocket or local audio
+USE_WEBSOCKET_MIC = True   # Control whether to use ESP32 or local microphone
 AUDIO_WS_PORT = 8001  # Port for audio websocket server
+MICROPHONE_WS_PORT = 8002  # Port for microphone WebSocket server
 
 @dataclass
 class ParrotBehavior:
@@ -152,7 +154,7 @@ class AudioClient:
         
         # Audio processing
         self.p = pyaudio.PyAudio()
-        self.input_device_index = self.get_default_input_device()
+        self.input_device_index = self.get_default_input_device() if not USE_WEBSOCKET_MIC else None
         self.recording_stream = None
         
         # WebSocket connections
@@ -169,6 +171,10 @@ class AudioClient:
         self.behavior_manager = BehaviorManager()
         self.last_automation_input = time.time()
         self.autonomous_mode = True  # Can be toggled to disable autonomous behaviors
+        
+        # Add microphone WebSocket server
+        self.mic_app = FastAPI()
+        self.mic_connections: Set[WebSocket] = set()
         
     def get_default_input_device(self):
         """Find the default input device index"""
@@ -202,6 +208,38 @@ class AudioClient:
             self.server = uvicorn.Server(config)
             self.server_task = asyncio.create_task(self.server.serve())
             await asyncio.sleep(1)  # Give server time to start
+        
+        # Start the microphone WebSocket server only if using ESP32 mic
+        if USE_WEBSOCKET_MIC:
+            mic_config = uvicorn.Config(self.mic_app, host="0.0.0.0", port=MICROPHONE_WS_PORT, log_level="error")
+            self.mic_server = uvicorn.Server(mic_config)
+            self.mic_server_task = asyncio.create_task(self.mic_server.serve())
+        
+        # Setup microphone WebSocket endpoint
+        @self.mic_app.websocket("/microphone")
+        async def microphone_websocket_endpoint(websocket: WebSocket):
+            await websocket.accept()
+            self.mic_connections.add(websocket)
+            print("ESP32 Microphone client connected")
+            
+            try:
+                while True:
+                    try:
+                        # Receive audio data from ESP32 microphone
+                        data = await websocket.receive_bytes()
+                        if not self.is_speaking:
+                            # Forward microphone data to OpenAI
+                            await self.openai.send_audio(data)
+                    except Exception as e:
+                        print(f"Error in microphone websocket: {e}")
+                        break
+            finally:
+                self.mic_connections.remove(websocket)
+                print("ESP32 Microphone client disconnected")
+                try:
+                    await websocket.close()
+                except:
+                    pass
 
     def setup_audio_websocket(self):
         """Setup FastAPI WebSocket endpoint"""
@@ -284,29 +322,32 @@ class AudioClient:
     async def main_loop(self):
         """Main entry point for all async operations"""
         try:
-            # Setup all components
             await self.setup()
             
-            # Start recording
-            self.start_recording()
+            # Only start recording if using local microphone
+            if not USE_WEBSOCKET_MIC:
+                self.start_recording()
             
-            # Create all tasks in the same event loop
+            # Create all tasks
             self.tasks = [
                 asyncio.create_task(self.animation_loop()),
                 asyncio.create_task(self.receive_from_openai()),
                 asyncio.create_task(self.manage_speaking_state()),
-                asyncio.create_task(self.process_microphone()),
-                asyncio.create_task(self.manage_autonomous_behaviors())  # Add new task
+                #asyncio.create_task(self.manage_autonomous_behaviors())
             ]
             
-            # Wait for all tasks to complete
+            # Add process_microphone task only if using local microphone
+            if not USE_WEBSOCKET_MIC:
+                self.tasks.append(asyncio.create_task(self.process_microphone()))
+            
             await asyncio.gather(*self.tasks)
             
         except Exception as e:
             print(f"Error in main loop: {e}")
             traceback.print_exc()
         finally:
-            self.stop_recording()  # Ensure recording is stopped
+            if not USE_WEBSOCKET_MIC:
+                self.stop_recording()
             await self.cleanup()
 
     async def animation_loop(self):
@@ -497,22 +538,6 @@ class AudioClient:
             print(f"Error in animation calculation: {e}")
             traceback.print_exc()
 
-    async def process_microphone(self):
-        """Process microphone input"""
-        try:
-            while self.running and self.recording_stream:
-                if not self.is_speaking:
-                    try:
-                        data = self.recording_stream.read(self.CHUNK, exception_on_overflow=False)
-                        await self.openai.send_audio(data)
-                    except Exception as e:
-                        print(f"Error sending to OpenAI: {e}")
-                await asyncio.sleep(0.0001)
-                
-        except Exception as e:
-            print(f"Error in microphone processing: {e}")
-            traceback.print_exc()
-
     async def manage_autonomous_behaviors(self):
         """Manage autonomous parrot behaviors during periods of silence"""
         try:
@@ -533,6 +558,24 @@ class AudioClient:
                 
         except Exception as e:
             print(f"Error in autonomous behaviors: {e}")
+            traceback.print_exc()
+
+    async def process_microphone(self):
+        """Process local microphone input"""
+        try:
+            while self.running and self.recording_stream:
+                if not self.is_speaking:
+                    try:
+                        data = self.recording_stream.read(self.CHUNK, exception_on_overflow=False)
+                        await self.openai.send_audio(data)
+                        # Update last voice input time when we get microphone data
+                        self.last_automation_input = time.time()
+                    except Exception as e:
+                        print(f"Error sending to OpenAI: {e}")
+                await asyncio.sleep(0.0001)
+                
+        except Exception as e:
+            print(f"Error in microphone processing: {e}")
             traceback.print_exc()
 
 # Create FastAPI app for audio websocket

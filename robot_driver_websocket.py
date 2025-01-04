@@ -50,10 +50,10 @@ class BottangoDriver:
     async def send_command(self, command: str):
         """Send a command to the current client"""
         if not self._current_websocket:
-            print("No active connection")
-            print(f"Active connections: {len(self.active_connections)}")
+            #print("No active connection")
+            #print(f"Active connections: {len(self.active_connections)}")
             if self.active_connections:
-                print("Setting new current websocket from active connections")
+                #print("Setting new current websocket from active connections")
                 self._current_websocket = next(iter(self.active_connections))
             else:
                 return False
