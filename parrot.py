@@ -31,13 +31,13 @@ class BehaviorManager:
         self.behaviors: List[ParrotBehavior] = [
             ParrotBehavior(
                 name="whistle",
-                prompt="Whistle a short tune like a parrot but don't say anything about it",
+                prompt="/whistle",
                 frequency=0.7,
                 min_silence=5.0
             ),
             ParrotBehavior(
                 name="squawk",
-                prompt="Squawk like a parrot one to three times but don't say anything about it",
+                prompt="/squawk",
                 frequency=0.7,
                 min_silence=5.0
             ),
