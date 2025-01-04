@@ -1,3 +1,4 @@
+from fastapi import FastAPI, WebSocket
 import asyncio
 import websockets
 import pyaudio
@@ -9,8 +10,49 @@ import json
 import webrtcvad
 from array import array
 from collections import deque
-from robot_driver import BottangoDriver
+from robot_driver_websocket import BottangoDriver
 import time
+
+# Global configuration
+USE_WEBSOCKET_AUDIO = True  # Control whether to use websocket or local audio
+AUDIO_WS_PORT = 8001  # Port for audio websocket server
+
+# Create FastAPI app with custom WebSocket settings
+audio_app = FastAPI()
+active_audio_connections = set()
+
+@audio_app.websocket("/audio-stream")
+async def audio_websocket_endpoint(websocket: WebSocket):
+    # Configure WebSocket with longer ping interval
+    websocket.ping_interval = 30.0  # Increase ping interval to 30 seconds
+    websocket.ping_timeout = 10.0   # Increase ping timeout to 10 seconds
+    
+    await websocket.accept()
+    active_audio_connections.add(websocket)
+    print("ESP32 Audio client connected")
+    
+    try:
+        while True:
+            try:
+                # Use a timeout for the receive operation
+                await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+            except asyncio.TimeoutError:
+                # Connection is still alive, just no message received
+                continue
+            except websockets.exceptions.ConnectionClosed as e:
+                print(f"ESP32 Audio client connection closed: {e.code} {e.reason}")
+                break
+            except Exception as e:
+                print(f"Error in websocket connection: {e}")
+                break
+    finally:
+        if websocket in active_audio_connections:
+            active_audio_connections.remove(websocket)
+        print("ESP32 Audio client disconnected")
+        try:
+            await websocket.close()
+        except:
+            pass
 
 class AudioClient:
     def __init__(self):
@@ -49,11 +91,9 @@ class AudioClient:
         self.head_movement_type = 'side'  # 'side' or 'tilt'
         
         # Initialize robot driver
-        self.robot = BottangoDriver()
-        if self.robot.initialize_servos():
-            print("Robot servos initialized successfully")
-        else:
-            print("Failed to initialize robot servos")
+        self.robot = BottangoDriver()  # Will use singleton instance
+        self.robot.start_server_background()
+        time.sleep(1)  # Give the server a moment to start
         
         # Find default input device
         self.input_device_index = self.get_default_input_device()
@@ -67,17 +107,26 @@ class AudioClient:
         self.audio_queue = deque()  # Queue for pending audio chunks
         self.is_playing = False
         
-        # Create playback stream with callback
-        self.playback_stream = self.p.open(
-            format=self.FORMAT,
-            channels=self.CHANNELS,
-            rate=self.RATE,
-            output=True,
-            frames_per_buffer=self.CHUNK,
-            stream_callback=self._audio_callback
-        )
-        self.playback_stream.start_stream()
-
+        # Audio playback configuration
+        if USE_WEBSOCKET_AUDIO:
+            # Start audio websocket server
+            self._start_audio_server()
+            self.playback_stream = None
+        else:
+            # Create local playback stream with callback
+            self.playback_stream = self.p.open(
+                format=self.FORMAT,
+                channels=self.CHANNELS,
+                rate=self.RATE,
+                output=True,
+                frames_per_buffer=self.CHUNK,
+                stream_callback=self._audio_callback
+            )
+            self.playback_stream.start_stream()
+        
+        # Add new audio timing management
+        self.audio_end_time = time.time()  # Track when current audio should finish
+        self.audio_timing_task = None  # Task to manage speaking state
 
     def get_default_input_device(self):
         """Find the default input device index"""
@@ -164,6 +213,8 @@ class AudioClient:
 
     async def animation_loop(self):
         """Main animation loop with parrot-like head movements"""
+        last_command_time = {}  # Track last command time for each type
+        
         while self.running:
             current_time = time.time()
             
@@ -198,30 +249,48 @@ class AudioClient:
                     self.head_rotation_next_position = current_rotation + np.random.uniform(-0.05, 0.05)
                     self.head_tilt_next_position = self.head_tilt_current_position + np.random.uniform(-0.05, 0.05)
             
-            # Apply current positions with quick head movements
+            # Apply current positions with rate limiting
+            current_time = time.time()
+            
             if self.mouth_current_position != self.mouth_next_position:
-                self.robot.set_mouth(self.mouth_next_position)
-                self.mouth_current_position = self.mouth_next_position
+                try:
+                    await self.robot.set_mouth(self.mouth_next_position)
+                    self.mouth_current_position = self.mouth_next_position
+                    last_command_time['mouth'] = current_time
+                except Exception as e:
+                    print(f"Error sending mouth command: {e}")
                 
             if self.wing_current_position != self.wing_next_position:
-                delta = self.wing_next_position - self.wing_current_position
-                self.wing_current_position += delta * 0.4
-                self.robot.set_wing(self.wing_current_position)
+                try:
+                    delta = self.wing_next_position - self.wing_current_position
+                    self.wing_current_position += delta * 0.4
+                    await self.robot.set_wing(self.wing_current_position)
+                    last_command_time['wing'] = current_time
+                except Exception as e:
+                    print(f"Error sending wing command: {e}")
                 
             if self.head_tilt_current_position != self.head_tilt_next_position:
-                delta = self.head_tilt_next_position - self.head_tilt_current_position
-                self.head_tilt_current_position += delta * 0.5  # Faster head tilt
-                self.robot.set_head_tilt(self.head_tilt_current_position)
+                try:
+                    delta = self.head_tilt_next_position - self.head_tilt_current_position
+                    self.head_tilt_current_position += delta * 0.5
+                    await self.robot.set_head_tilt(self.head_tilt_current_position)
+                    last_command_time['head_tilt'] = current_time
+                except Exception as e:
+                    print(f"Error sending head tilt command: {e}")
                 
             if self.head_rotation_current_position != self.head_rotation_next_position:
-                delta = self.head_rotation_next_position - self.head_rotation_current_position
-                self.head_rotation_current_position += delta * 0.5  # Faster rotation
-                self.robot.set_head_rotation(self.head_rotation_current_position)
+                try:
+                    delta = self.head_rotation_next_position - self.head_rotation_current_position
+                    self.head_rotation_current_position += delta * 0.5
+                    await self.robot.set_head_rotation(self.head_rotation_current_position)
+                    last_command_time['head_rotation'] = current_time
+                except Exception as e:
+                    print(f"Error sending head rotation command: {e}")
             
             await asyncio.sleep(self.animation_resolution)
 
     async def receive_audio(self):
-        """Receive audio and play it"""
+        """Receive audio from OpenAI and handle playback"""
         print("Starting audio receive loop")
         
         while self.running:
@@ -235,25 +304,27 @@ class AudioClient:
                         self.is_speaking = True
                         audio_data = base64.b64decode(msg_data["audio"])
                         audio_length = len(audio_data)/self.RATE
-                        print(f"Queueing {audio_length:.3f}s of audio at {self.audio_buffer_length:.3f}s")
+                        print(f"Received {audio_length:.3f}s of audio")
                         
-                        # Add to queue or start playing if nothing is playing
-                        if self.is_playing:
-                            self.audio_queue.append(audio_data)
+                        if USE_WEBSOCKET_AUDIO:
+                            # Stream directly without creating a new task
+                            await self.stream_to_speakers(audio_data)
                         else:
-                            self.current_audio_data = audio_data
-                            self.audio_pos = 0
-                            self.is_playing = True
+                            # Use local playback
+                            if self.is_playing:
+                                self.audio_queue.append(audio_data)
+                            else:
+                                self.current_audio_data = audio_data
+                                self.audio_pos = 0
+                                self.is_playing = True
                         
                         self.audio_buffer_length += audio_length
-                    elif msg_type == "response.done":
-                        pass
                         
             except Exception as e:
                 print(f"\nError receiving audio: {e}")
                 traceback.print_exc()
                 self.is_speaking = False
-                self.robot.set_mouth(1.0)
+                #await self.robot.set_mouth(1.0)
                 break
 
     def cleanup(self):
@@ -261,7 +332,7 @@ class AudioClient:
         self.running = False
         self.is_speaking = False
         
-        if self.playback_stream:
+        if not USE_WEBSOCKET_AUDIO and self.playback_stream:
             self.playback_stream.stop_stream()
             self.playback_stream.close()
             
@@ -269,7 +340,7 @@ class AudioClient:
         
         # Reset mouth position
         if hasattr(self, 'robot'):
-            self.robot._send_command_with_ok("sCI,27,0\n")
+            self.robot.set_mouth(1.0)
 
     def _audio_callback(self, in_data, frame_count, time_info, status):
         """Callback for audio playback"""
@@ -360,6 +431,72 @@ class AudioClient:
         
         # Head rotation stays relatively still during speech
         self.head_rotation_next_position = 0.5 + np.random.uniform(-0.1, 0.1)
+
+    def _start_audio_server(self):
+        """Start the audio websocket server in a background thread"""
+        import uvicorn
+        import threading
+        
+        def run_server():
+            uvicorn.run(audio_app, host="0.0.0.0", port=AUDIO_WS_PORT)
+            
+        self.audio_server_thread = threading.Thread(target=run_server, daemon=True)
+        self.audio_server_thread.start()
+        time.sleep(1)  # Give server time to start
+
+    async def manage_speaking_state(self):
+        """Global task to manage speaking state based on audio timing"""
+        while self.running:
+            current_time = time.time()
+            if current_time >= self.audio_end_time:
+                if self.is_speaking:
+                    print("Audio playback complete")
+                    self.is_speaking = False
+            await asyncio.sleep(0.1)  # Check every 100ms
+
+    async def stream_to_speakers(self, audio_data):
+        """Stream audio data to all connected ESP32 clients"""
+        if not active_audio_connections:
+            print("No ESP32 audio clients connected")
+            return
+            
+        try:
+            # Calculate audio duration and update end time
+            audio_duration = len(audio_data) / (self.RATE * 2)
+            self.audio_end_time += audio_duration
+            print(f"Streaming {audio_duration:.3f}s of audio, will finish at {self.audio_end_time:.3f}")
+            
+            # Start the speaking state management task if needed
+            if not self.audio_timing_task or self.audio_timing_task.done():
+                self.audio_timing_task = asyncio.create_task(self.manage_speaking_state())
+            
+            self.is_speaking = True
+            
+            # Stream the audio data with rate limiting
+            chunk_size = 512  # Smaller chunks
+            delay = 0.002    # Slightly longer delay between chunks
+            
+            for i in range(0, len(audio_data), chunk_size):
+                chunk = audio_data[i:i + chunk_size]
+                
+                # Get a snapshot of current connections
+                clients = list(active_audio_connections)
+                
+                # Send to each client sequentially to avoid overwhelming the connection
+                for client in clients:
+                    try:
+                        await client.send_bytes(chunk)
+                    except Exception as e:
+                        print(f"Error sending to client: {e}")
+                        if client in active_audio_connections:
+                            active_audio_connections.remove(client)
+                
+                # Rate limiting delay
+                await asyncio.sleep(delay)
+                
+        except Exception as e:
+            print(f"Error in stream_to_speakers: {e}")
+            traceback.print_exc()
 
 async def main():
     client = AudioClient()  # No need for async context manager
