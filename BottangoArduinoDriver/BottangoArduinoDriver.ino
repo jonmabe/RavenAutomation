@@ -21,6 +21,11 @@ bool isConfigured = false;
 bool wsCommandInProgress = false;
 unsigned long wsTimeOfLastChar = 0;
 
+// Add these constants at the top with other definitions
+const int WIFI_RETRY_DELAY = 5000;
+const int WIFI_TIMEOUT = 10000;
+const unsigned long WIFI_CHECK_INTERVAL = 30000;  // Check every 30 seconds
+
 void initializeServos() {
 
     BottangoCore::initialized = true;
@@ -32,7 +37,7 @@ void initializeServos() {
         "rSVPin,14,850,2100,3000,1760",   // Head tilt
         "rSVPin,27,1450,1700,3000,1700",  // Mouth
         "rSVPin,13,1500,2000,3000,2000",   // Wing
-        "rSVPin,12,1275,1725,3000,1500"  // Head rotation
+        "rSVPin,12,1275,1725,5000,1500"  // Head rotation
     };
     
     char cmdBuffer[MAX_COMMAND_LENGTH];  // Safe buffer for command processing
@@ -81,12 +86,24 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 void setup() {
     Serial.begin(115200);
     
-    // Connect to WiFi
+    // Enhanced WiFi setup
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);  // Disable WiFi sleep mode for better stability
+    WiFi.setAutoReconnect(true);
+    
+    // Connect to WiFi with timeout
+    unsigned long startAttempt = millis();
     WiFi.begin(ssid, password);
+    
     while (WiFi.status() != WL_CONNECTED) {
+        if (millis() - startAttempt > WIFI_TIMEOUT) {
+            Serial.println("\nWiFi connection timeout. Restarting...");
+            ESP.restart();
+        }
         delay(500);
         Serial.print(".");
     }
+    
     Serial.println("\nWiFi connected");
     Serial.println("IP address: " + WiFi.localIP().toString());
     
@@ -102,7 +119,35 @@ void setup() {
     initializeServos();  // Initialize servo parameters
 }
 
+// Add this function to check WiFi status
+void checkWiFiConnection() {
+    static unsigned long lastCheck = 0;
+    
+    if (millis() - lastCheck >= WIFI_CHECK_INTERVAL) {
+        lastCheck = millis();
+        
+        if (WiFi.status() != WL_CONNECTED) {
+            Serial.println("WiFi connection lost. Reconnecting...");
+            WiFi.disconnect();
+            WiFi.begin(ssid, password);
+            
+            // Wait briefly for reconnection
+            unsigned long startAttempt = millis();
+            while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < WIFI_RETRY_DELAY) {
+                delay(100);
+            }
+            
+            if (WiFi.status() != WL_CONNECTED) {
+                Serial.println("Reconnection failed. Restarting device...");
+                ESP.restart();
+            }
+        }
+    }
+}
+
 void loop() {
+    checkWiFiConnection();  // Add this line at the start of loop()
+    
     webSocket.loop();  // Handle WebSocket events
     
     // Handle command timeout

@@ -28,6 +28,11 @@ const int DMA_BUFFER_COUNT = 8;
 // Add near the top with other constants
 const size_t NETWORK_BUFFER_SIZE = 8192;  // Network buffer size
 
+// Add these constants at the top with other definitions
+const int WIFI_RETRY_DELAY = 5000;
+const int WIFI_TIMEOUT = 10000;
+const unsigned long WIFI_CHECK_INTERVAL = 30000;  // Check every 30 seconds
+
 WebSocketsClient webSocket;
 bool isConfigured = false;
 
@@ -119,12 +124,24 @@ void configureI2S() {
 void setup() {
     Serial.begin(115200);
     
-    // Connect to WiFi
+    // Enhanced WiFi setup
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);  // Disable WiFi sleep mode for better stability
+    WiFi.setAutoReconnect(true);
+    
+    // Connect to WiFi with timeout
+    unsigned long startAttempt = millis();
     WiFi.begin(ssid, password);
+    
     while (WiFi.status() != WL_CONNECTED) {
+        if (millis() - startAttempt > WIFI_TIMEOUT) {
+            Serial.println("\nWiFi connection timeout. Restarting...");
+            ESP.restart();
+        }
         delay(500);
         Serial.print(".");
     }
+    
     Serial.println("\nWiFi connected");
     Serial.println("IP address: " + WiFi.localIP().toString());
     
@@ -135,13 +152,34 @@ void setup() {
     webSocket.enableHeartbeat(15000, 3000, 2);
 }
 
-void loop() {
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("WiFi disconnected. Reconnecting...");
-        WiFi.begin(ssid, password);
-        delay(1000);
-        return;
+// Add this function to check WiFi status
+void checkWiFiConnection() {
+    static unsigned long lastCheck = 0;
+    
+    if (millis() - lastCheck >= WIFI_CHECK_INTERVAL) {
+        lastCheck = millis();
+        
+        if (WiFi.status() != WL_CONNECTED) {
+            Serial.println("WiFi connection lost. Reconnecting...");
+            WiFi.disconnect();
+            WiFi.begin(ssid, password);
+            
+            // Wait briefly for reconnection
+            unsigned long startAttempt = millis();
+            while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < WIFI_RETRY_DELAY) {
+                delay(100);
+            }
+            
+            if (WiFi.status() != WL_CONNECTED) {
+                Serial.println("Reconnection failed. Restarting device...");
+                ESP.restart();
+            }
+        }
     }
+}
+
+void loop() {
+    checkWiFiConnection();
 
     webSocket.loop();
 
