@@ -72,8 +72,8 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
             strncpy(cmdBuffer, (char*)payload, sizeof(cmdBuffer) - 1);
             cmdBuffer[sizeof(cmdBuffer) - 1] = '\0';
             
-            Serial.print("Command: ");
-            Serial.println(cmdBuffer);
+            //Serial.print("Command: ");
+            //Serial.println(cmdBuffer);
             
             BottangoCore::processWebSocketCommand(cmdBuffer);
             

@@ -625,7 +625,7 @@ namespace BasicCommands
     {
         while (pgm_read_byte(targetOutput) != 0x00)
         {
-            Serial.print((char)pgm_read_byte(targetOutput));
+            //Serial.print((char)pgm_read_byte(targetOutput));
             targetOutput++;
         }
     }
