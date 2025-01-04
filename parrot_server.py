@@ -12,6 +12,9 @@ from typing import Set, Optional, List, Callable
 from openai import OpenAIProxy  # Replace FastAPI WebSocket client with direct OpenAI proxy
 from dataclasses import dataclass
 import random
+import wave
+from datetime import datetime
+import os
 
 # Global configuration
 USE_WEBSOCKET_AUDIO = True  # Control whether to use websocket or local audio
@@ -176,6 +179,11 @@ class AudioClient:
         self.mic_app = FastAPI()
         self.mic_connections: Set[WebSocket] = set()
         
+        # Add audio recording buffers
+        self.current_audio_chunks = []
+        self.recordings_dir = "mic_recordings"
+        os.makedirs(self.recordings_dir, exist_ok=True)
+        
     def get_default_input_device(self):
         """Find the default input device index"""
         default_device = None
@@ -228,6 +236,8 @@ class AudioClient:
                         # Receive audio data from ESP32 microphone
                         data = await websocket.receive_bytes()
                         if not self.is_speaking:
+                            # Store the audio chunk
+                            self.current_audio_chunks.append(data)
                             # Forward microphone data to OpenAI
                             await self.openai.send_audio(data)
                     except Exception as e:
@@ -419,8 +429,22 @@ class AudioClient:
                             pass
                     self.last_automation_input = time.time()
                 elif response_type == "input_audio_buffer.speech_started":
-                    # Update last voice input time when we get microphone data
+                    self.current_audio_chunks = []  # Clear buffer for new recording
                     self.last_automation_input = time.time()
+                elif response_type == "input_audio_buffer.speech_stopped":
+                    # Save the recorded audio to a WAV file
+                    if self.current_audio_chunks:
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        filename = os.path.join(self.recordings_dir, f"mic_recording_{timestamp}.wav")
+                        
+                        with wave.open(filename, 'wb') as wav_file:
+                            wav_file.setnchannels(self.CHANNELS)
+                            wav_file.setsampwidth(2)  # 16-bit audio
+                            wav_file.setframerate(self.RATE)
+                            wav_file.writeframes(b''.join(self.current_audio_chunks))
+                        
+                        print(f"Saved recording to {filename}")
+                        self.current_audio_chunks = []  # Clear the buffer
                 elif response_type == "response.done":
                     pass
                         
@@ -567,8 +591,8 @@ class AudioClient:
                 if not self.is_speaking:
                     try:
                         data = self.recording_stream.read(self.CHUNK, exception_on_overflow=False)
+                        self.current_audio_chunks.append(data)  # Store the audio chunk
                         await self.openai.send_audio(data)
-                        # Update last voice input time when we get microphone data
                         self.last_automation_input = time.time()
                     except Exception as e:
                         print(f"Error sending to OpenAI: {e}")
