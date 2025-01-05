@@ -11,3 +11,4 @@ logs/
 # Other
 .DS_Store
 __pycache__/
+mic_recordings/

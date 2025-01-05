@@ -15,6 +15,7 @@ import random
 import wave
 from datetime import datetime
 import os
+from scipy import signal
 
 # Global configuration
 USE_WEBSOCKET_AUDIO = True  # Control whether to use websocket or local audio
@@ -182,7 +183,13 @@ class AudioClient:
         # Add audio recording buffers
         self.current_audio_chunks = []
         self.recordings_dir = "mic_recordings"
+        self.save_recordings = True
         os.makedirs(self.recordings_dir, exist_ok=True)
+        
+        # Add audio processing parameters
+        self.dc_offset = 0  # Will be calculated dynamically
+        self.alpha = 0.95   # For DC offset estimation
+        self.gain = 1.5     # Adjustable gain factor
         
     def get_default_input_device(self):
         """Find the default input device index"""
@@ -233,12 +240,15 @@ class AudioClient:
             try:
                 while True:
                     try:
-                        # Receive audio data from ESP32 microphone
                         data = await websocket.receive_bytes()
                         if not self.is_speaking:
-                            # Store the audio chunk
+                            # Boost the gain
+                            boosted_data = await self.process_audio_chunk(data)
+                            
+                            # Store the original audio chunk for WAV file
                             self.current_audio_chunks.append(data)
-                            # Forward microphone data to OpenAI
+                            
+                            # Send boosted audio to OpenAI
                             await self.openai.send_audio(data)
                     except Exception as e:
                         print(f"Error in microphone websocket: {e}")
@@ -433,7 +443,7 @@ class AudioClient:
                     self.last_automation_input = time.time()
                 elif response_type == "input_audio_buffer.speech_stopped":
                     # Save the recorded audio to a WAV file
-                    if self.current_audio_chunks:
+                    if self.save_recordings and self.current_audio_chunks:
                         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                         filename = os.path.join(self.recordings_dir, f"mic_recording_{timestamp}.wav")
                         
@@ -591,7 +601,11 @@ class AudioClient:
                 if not self.is_speaking:
                     try:
                         data = self.recording_stream.read(self.CHUNK, exception_on_overflow=False)
-                        self.current_audio_chunks.append(data)  # Store the audio chunk
+
+                        # Store the processed audio chunk
+                        self.current_audio_chunks.append(data)
+                        
+                        # Send to OpenAI
                         await self.openai.send_audio(data)
                         self.last_automation_input = time.time()
                     except Exception as e:
@@ -601,6 +615,28 @@ class AudioClient:
         except Exception as e:
             print(f"Error in microphone processing: {e}")
             traceback.print_exc()
+
+    async def process_audio_chunk(self, data: bytes) -> bytes:
+        """Boost audio gain before sending to OpenAI"""
+        try:
+            # Convert bytes to numpy array
+            audio = np.frombuffer(data, dtype=np.int16)
+            
+            # Apply fixed gain (adjust this value as needed)
+            gain = 10.0  # Start with 4x amplification
+            audio = audio.astype(np.float32) * gain
+            
+            # Clip to prevent distortion
+            audio = np.clip(audio, -32768, 32767)
+            
+            # Convert back to int16
+            audio = audio.astype(np.int16)
+            
+            return audio.tobytes()
+            
+        except Exception as e:
+            print(f"Error processing audio: {e}")
+            return data
 
 # Create FastAPI app for audio websocket
 audio_app = FastAPI()

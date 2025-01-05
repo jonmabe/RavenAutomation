@@ -6,10 +6,7 @@
 #include <WiFi.h>
 #include <WebSocketsClient.h>
 #include <driver/i2s.h>
-
-// WiFi credentials
-const char* ssid = "***REMOVED***";
-const char* password = "***REMOVED***";
+#include <WiFiManager.h>
 
 // Bottango WebSocket settings
 const char* wsHost = "192.168.1.174";
@@ -45,6 +42,11 @@ const int DMA_BUFFER_COUNT = 8;
 const size_t MIC_BUFFER_SIZE = 1024;
 int16_t micBuffer[MIC_BUFFER_SIZE];
 
+// Add a simple moving average filter
+const int FILTER_SIZE = 4;
+int32_t filter_buffer[FILTER_SIZE];
+int filter_index = 0;
+
 // WebSocket clients
 WebSocketsClient bottangoWebSocket;  // Renamed from webSocket
 WebSocketsClient audioWebSocket;     // For speaker
@@ -55,17 +57,12 @@ String commandBuffer = "";
 bool isConfigured = false;
 bool wsCommandInProgress = false;
 unsigned long wsTimeOfLastChar = 0;
-bool wasConnected = false;
-unsigned long lastReconnectAttempt = 0;
-const unsigned long RECONNECT_INTERVAL = 5000;
-const int WIFI_RETRY_DELAY = 5000;
-const int WIFI_TIMEOUT = 10000;
 const unsigned long WIFI_CHECK_INTERVAL = 30000;
 
 // Add I2S configuration functions
 void configureI2S() {
     const uint32_t SAMPLE_RATE = 24000;
-    const uint8_t CHANNELS = 1;
+    const uint8_t CHANNELS = 2;
     const uint8_t BITS_PER_SAMPLE = 16;
     
     Serial.printf("Configuring I2S - Sample Rate: %d Hz, Channels: %d, Bits: %d\n", 
@@ -78,14 +75,14 @@ void configureI2S() {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
         .sample_rate = SAMPLE_RATE,
         .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-        .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
+        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
         .communication_format = I2S_COMM_FORMAT_STAND_I2S,
         .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
         .dma_buf_count = DMA_BUFFER_COUNT,
         .dma_buf_len = BUFFER_SIZE,
-        .use_apll = false,
+        .use_apll = true,
         .tx_desc_auto_clear = true,
-        .fixed_mclk = -1  // Changed to -1 to disable MCLK output
+        .fixed_mclk = -1
     };
 
     // Install I2S driver
@@ -116,6 +113,9 @@ void configureI2S() {
     isConfigured = true;
 }
 
+// Add these constants
+const int I2S_MIC_GAIN_DB = 30;  // Microphone gain in dB
+
 void setupMicI2S() {
     // Try to uninstall, but ignore errors
     i2s_driver_uninstall(I2S_MIC_PORT);
@@ -123,19 +123,19 @@ void setupMicI2S() {
     i2s_config_t i2s_mic_config = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
         .sample_rate = 24000,
-        .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+        .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
         .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
         .communication_format = I2S_COMM_FORMAT_STAND_I2S,
         .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-        .dma_buf_count = 8,
-        .dma_buf_len = MIC_BUFFER_SIZE,
-        .use_apll = false,
+        .dma_buf_count = DMA_BUFFER_COUNT,
+        .dma_buf_len = BUFFER_SIZE,
+        .use_apll = true,
         .tx_desc_auto_clear = false,
-        .fixed_mclk = -1  // Changed to -1 to disable MCLK output
+        .fixed_mclk = 0
     };
     
     i2s_pin_config_t mic_pin_config = {
-        .mck_io_num = I2S_PIN_NO_CHANGE,  // MCK must come first
+        .mck_io_num = I2S_PIN_NO_CHANGE,
         .bck_io_num = I2S_MIC_SCK,
         .ws_io_num = I2S_MIC_WS,
         .data_out_num = I2S_PIN_NO_CHANGE,
@@ -154,21 +154,73 @@ void setupMicI2S() {
         return;
     }
     
-    Serial.println("I2S microphone configured successfully");
+    // Additional microphone optimizations
+    err = i2s_set_clk(I2S_MIC_PORT, 24000, I2S_BITS_PER_SAMPLE_32BIT, I2S_CHANNEL_MONO);
+    if (err != ESP_OK) {
+        Serial.printf("Failed to set I2S clock: %d\n", err);
+    }
+
+    // Let's increase the gain in our 32-bit to 16-bit conversion
+    // Modify the microphone reading code in loop()
+    if (micWebSocket.isConnected()) {
+        size_t bytes_read = 0;
+        esp_err_t result = i2s_read(I2S_MIC_PORT, micBuffer, sizeof(micBuffer), &bytes_read, 0);
+        
+        if (result == ESP_OK && bytes_read > 0) {
+            // Convert 32-bit samples to 16-bit with proper scaling
+            int32_t* samples32 = (int32_t*)micBuffer;
+            int16_t* samples16 = (int16_t*)micBuffer;
+            size_t sample_count = bytes_read / 4;  // 4 bytes per 32-bit sample
+            
+            for (size_t i = 0; i < sample_count; i++) {
+                // Scale down 32-bit to 16-bit with increased gain
+                int32_t sample = samples32[i] >> 12;
+                
+                // Apply moving average filter
+                filter_buffer[filter_index] = sample;
+                filter_index = (filter_index + 1) % FILTER_SIZE;
+                
+                int32_t filtered_sample = 0;
+                for (int j = 0; j < FILTER_SIZE; j++) {
+                    filtered_sample += filter_buffer[j];
+                }
+                filtered_sample /= FILTER_SIZE;
+                
+                // Apply gain after filtering
+                filtered_sample = (filtered_sample * 3) >> 1;  // 1.5x gain
+                
+                // Clip to prevent distortion
+                filtered_sample = constrain(filtered_sample, -32768, 32767);
+                
+                // Store the filtered sample
+                samples16[i] = (int16_t)filtered_sample;
+            }
+            
+            // Send the 16-bit samples
+            micWebSocket.sendBIN((uint8_t*)samples16, sample_count * 2);
+        }
+    }
 }
 
 // WebSocket event handlers
 void bottangoWebSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
     switch(type) {
         case WStype_DISCONNECTED:
-            Serial.println("WebSocket Disconnected!");
+            Serial.println("Bottango WebSocket Disconnected!");
             wsCommandInProgress = false;
             wsTimeOfLastChar = 0;
             commandBuffer = "";
             break;
             
         case WStype_CONNECTED:
-            Serial.println("WebSocket Connected!");
+            Serial.println("Bottango WebSocket Connected!");
+            break;
+            
+        case WStype_ERROR:
+            Serial.println("Bottango WebSocket Error - Attempting reconnect");
+            bottangoWebSocket.disconnect();
+            delay(1000);
+            bottangoWebSocket.begin(wsHost, wsPort, wsPath);
             break;
             
         case WStype_TEXT:
@@ -201,11 +253,45 @@ void audioWebSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
             Serial.println("Audio WebSocket Disconnected");
             break;
             
+        case WStype_ERROR:
+            Serial.println("Audio WebSocket Error - Attempting reconnect");
+            audioWebSocket.disconnect();
+            delay(1000);
+            audioWebSocket.begin(wsHost, wsPortAudio, wsPathAudio);
+            break;
+            
         case WStype_BIN:
             if (isConfigured) {
-                size_t bytes_written = 0;
-                Serial.printf("Writing %zu bytes to I2S\n", length);
-                i2s_write(I2S_PORT, payload, length, &bytes_written, portMAX_DELAY);
+                const size_t MAX_CHUNK = 512;  // Process in smaller chunks
+                size_t processed = 0;
+                
+                while (processed < length) {
+                    size_t chunk_size = min(MAX_CHUNK, length - processed);
+                    size_t stereo_length = chunk_size * 2;
+                    uint8_t* stereo_buffer = (uint8_t*)malloc(stereo_length);
+                    
+                    if (stereo_buffer) {
+                        // Duplicate mono data to both channels
+                        for (size_t i = 0; i < chunk_size; i += 2) {
+                            // Copy sample to left channel
+                            stereo_buffer[i*2] = payload[processed + i];
+                            stereo_buffer[i*2 + 1] = payload[processed + i + 1];
+                            // Copy same sample to right channel
+                            stereo_buffer[i*2 + 2] = payload[processed + i];
+                            stereo_buffer[i*2 + 3] = payload[processed + i + 1];
+                        }
+                        
+                        size_t bytes_written = 0;
+                        i2s_write(I2S_PORT, stereo_buffer, stereo_length, &bytes_written, portMAX_DELAY);
+                        free(stereo_buffer);
+                    }
+                    
+                    processed += chunk_size;
+                    // Small delay between chunks to prevent overwhelming the system
+                    if (processed < length) {
+                        delay(1);
+                    }
+                }
             }
             break;
     }
@@ -219,6 +305,13 @@ void micWebSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
             
         case WStype_DISCONNECTED:
             Serial.println("Microphone WebSocket Disconnected");
+            break;
+            
+        case WStype_ERROR:
+            Serial.println("Microphone WebSocket Error - Attempting reconnect");
+            micWebSocket.disconnect();
+            delay(1000);
+            micWebSocket.begin(wsHost, wsPortMic, wsPathMic);
             break;
     }
 }
@@ -245,26 +338,36 @@ void initializeServos() {
     }
 }
 
+// Add these constants at the top
+const int HEARTBEAT_INTERVAL = 15000; // 15 seconds
+const int HEARTBEAT_TIMEOUT = 3000;   // 3 seconds
+const int HEARTBEAT_RETRIES = 2;
+
 void setup() {
     Serial.begin(115200);
     
-    // WiFi setup
-    WiFi.mode(WIFI_STA);
-    WiFi.setSleep(false);
-    WiFi.setAutoReconnect(true);
+    // WiFi setup using WiFiManager
+    WiFiManager wifiManager;
     
-    unsigned long startAttempt = millis();
-    WiFi.begin(ssid, password);
+    // Uncomment to reset settings - wipe stored credentials
+    // wifiManager.resetSettings();
     
-    while (WiFi.status() != WL_CONNECTED) {
-        if (millis() - startAttempt > WIFI_TIMEOUT) {
-            ESP.restart();
-        }
-        delay(500);
-        Serial.print(".");
+    // Set custom timeout (optional)
+    wifiManager.setConfigPortalTimeout(180); // 3 minutes
+    
+    // Custom AP name using last 4 bytes of MAC address
+    uint8_t mac[6];
+    WiFi.macAddress(mac);
+    String apName = "ParrotConfig-" + String(mac[4], HEX) + String(mac[5], HEX);
+    
+    // Attempt to connect or create AP for configuration
+    if(!wifiManager.autoConnect(apName.c_str())) {
+        Serial.println("Failed to connect and hit timeout");
+        delay(3000);
+        ESP.restart();
     }
     
-    Serial.println("\nWiFi connected");
+    Serial.println("WiFi connected");
     Serial.println("IP address: " + WiFi.localIP().toString());
 
     // Configure I2S
@@ -275,19 +378,23 @@ void setup() {
     BottangoCore::bottangoSetup();
     initializeServos();
     
-    // Setup all WebSocket connections
+    // Bottango WebSocket
     bottangoWebSocket.begin(wsHost, wsPort, wsPath);
     bottangoWebSocket.onEvent(bottangoWebSocketEvent);
     bottangoWebSocket.setReconnectInterval(5000);
+    bottangoWebSocket.enableHeartbeat(HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT, HEARTBEAT_RETRIES);
     
+    // Audio WebSocket
     audioWebSocket.begin(wsHost, wsPortAudio, wsPathAudio);
     audioWebSocket.onEvent(audioWebSocketEvent);
     audioWebSocket.setReconnectInterval(5000);
-    audioWebSocket.enableHeartbeat(15000, 3000, 2);
+    audioWebSocket.enableHeartbeat(HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT, HEARTBEAT_RETRIES);
     
+    // Microphone WebSocket
     micWebSocket.begin(wsHost, wsPortMic, wsPathMic);
     micWebSocket.onEvent(micWebSocketEvent);
     micWebSocket.setReconnectInterval(5000);
+    micWebSocket.enableHeartbeat(HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT, HEARTBEAT_RETRIES);
 }
 
 void checkWiFiConnection() {
@@ -297,20 +404,18 @@ void checkWiFiConnection() {
         lastCheck = millis();
         
         if (WiFi.status() != WL_CONNECTED) {
-            Serial.println("WiFi connection lost. Reconnecting...");
-            WiFi.disconnect();
-            WiFi.begin(ssid, password);
+            Serial.println("WiFi connection lost. Attempting to reconnect...");
             
-            // Wait briefly for reconnection
-            unsigned long startAttempt = millis();
-            while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < WIFI_RETRY_DELAY) {
-                delay(100);
-            }
+            WiFiManager wifiManager;
+            wifiManager.setConfigPortalTimeout(60); // 1 minute timeout for reconnection
             
-            if (WiFi.status() != WL_CONNECTED) {
-                Serial.println("Reconnection failed. Restarting device...");
+            if (!wifiManager.autoConnect()) {
+                Serial.println("Failed to reconnect. Restarting...");
                 ESP.restart();
             }
+            
+            Serial.println("Reconnected to WiFi");
+            Serial.println("IP address: " + WiFi.localIP().toString());
         }
     }
 }
@@ -328,13 +433,47 @@ void loop() {
         BottangoCore::effectorPool.updateAllDriveTargets();
     }
     
-    // Handle microphone data
-    if (micWebSocket.isConnected()) {
+    // Handle microphone data with rate limiting
+    static unsigned long lastMicRead = 0;
+    const unsigned long MIC_READ_INTERVAL = 20;  // 20ms between reads
+    
+    if (micWebSocket.isConnected() && millis() - lastMicRead >= MIC_READ_INTERVAL) {
         size_t bytes_read = 0;
         esp_err_t result = i2s_read(I2S_MIC_PORT, micBuffer, sizeof(micBuffer), &bytes_read, 0);
         
         if (result == ESP_OK && bytes_read > 0) {
-            micWebSocket.sendBIN((uint8_t*)micBuffer, bytes_read);
+            // Convert 32-bit samples to 16-bit with proper scaling
+            int32_t* samples32 = (int32_t*)micBuffer;
+            int16_t* samples16 = (int16_t*)micBuffer;
+            size_t sample_count = bytes_read / 4;  // 4 bytes per 32-bit sample
+            
+            for (size_t i = 0; i < sample_count; i++) {
+                // Scale down 32-bit to 16-bit with increased gain
+                int32_t sample = samples32[i] >> 12;
+                
+                // Apply moving average filter
+                filter_buffer[filter_index] = sample;
+                filter_index = (filter_index + 1) % FILTER_SIZE;
+                
+                int32_t filtered_sample = 0;
+                for (int j = 0; j < FILTER_SIZE; j++) {
+                    filtered_sample += filter_buffer[j];
+                }
+                filtered_sample /= FILTER_SIZE;
+                
+                // Apply gain after filtering
+                filtered_sample = (filtered_sample * 3) >> 1;  // 1.5x gain
+                
+                // Clip to prevent distortion
+                filtered_sample = constrain(filtered_sample, -32768, 32767);
+                
+                // Store the filtered sample
+                samples16[i] = (int16_t)filtered_sample;
+            }
+            
+            // Send the 16-bit samples
+            micWebSocket.sendBIN((uint8_t*)samples16, sample_count * 2);
+            lastMicRead = millis();
         }
     }
     
@@ -346,5 +485,6 @@ void loop() {
         wsTimeOfLastChar = 0;
     }
     
-    delay(1);
+    // Increased delay to give more time for system tasks
+    delay(2);
 }
