@@ -8,10 +8,8 @@
 #include <driver/i2s.h>
 #include <WiFiManager.h>
 
-// Bottango WebSocket settings
 const char* wsHost = "192.168.1.174";
 const int wsPort = 8080;
-const char* wsPath = "/bottango";
 
 // Audio WebSocket settings
 const int wsPortAudio = 8001;
@@ -48,7 +46,6 @@ int32_t filter_buffer[FILTER_SIZE];
 int filter_index = 0;
 
 // WebSocket clients
-WebSocketsClient bottangoWebSocket;  // Renamed from webSocket
 WebSocketsClient audioWebSocket;     // For speaker
 WebSocketsClient micWebSocket;       // For microphone
 
@@ -67,7 +64,7 @@ const int HEARTBEAT_RETRIES = 2;
 // Add animation parameters near other constants
 const float ENERGY_SMOOTHING = 0.5;
 const float ANIMATION_RESOLUTION = 0.250;
-const int IDLE_INTERVAL = 500;  // 500ms
+const int IDLE_INTERVAL = 1500;  // 500ms
 const int IDLE_VARIANCE = 300;  // ±300ms
 const float HEAD_MOVEMENT_RANGE = 0.2;  // 20% movement range
 
@@ -90,7 +87,6 @@ const uint8_t HEAD_TILT = 1;
 // Add these variables with other state variables
 uint8_t head_movement_type = HEAD_SIDE;
 bool is_speaking = false;
-unsigned long idle_interval = 500;  // Base interval of 500ms
 
 // Add a timestamp for animation updates
 unsigned long last_animation_update = 0;
@@ -235,47 +231,6 @@ void setupMicI2S() {
             // Send the 16-bit samples
             micWebSocket.sendBIN((uint8_t*)samples16, sample_count * 2);
         }
-    }
-}
-
-// WebSocket event handlers
-void bottangoWebSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
-    switch(type) {
-        case WStype_DISCONNECTED:
-            Serial.println("Bottango WebSocket Disconnected!");
-            wsCommandInProgress = false;
-            wsTimeOfLastChar = 0;
-            commandBuffer = "";
-            break;
-            
-        case WStype_CONNECTED:
-            Serial.println("Bottango WebSocket Connected!");
-            break;
-            
-        case WStype_ERROR:
-            Serial.println("Bottango WebSocket Error - Attempting reconnect");
-            bottangoWebSocket.disconnect();
-            delay(1000);
-            bottangoWebSocket.begin(wsHost, wsPort, wsPath);
-            break;
-            
-        case WStype_TEXT:
-            wsCommandInProgress = true;
-            wsTimeOfLastChar = millis();
-            
-            // Process the command
-            char cmdBuffer[MAX_COMMAND_LENGTH];
-            strncpy(cmdBuffer, (char*)payload, sizeof(cmdBuffer) - 1);
-            cmdBuffer[sizeof(cmdBuffer) - 1] = '\0';
-            
-            //Serial.print("Command: ");
-            //Serial.println(cmdBuffer);
-            
-            BottangoCore::processWebSocketCommand(cmdBuffer);
-            
-            wsCommandInProgress = false;
-            wsTimeOfLastChar = 0;
-            break;
     }
 }
 
@@ -463,7 +418,7 @@ void animation_loop() {
     last_animation_update = current_time;
     // Handle idle animations when not speaking
     if (!is_speaking) {
-        if (current_time - last_idle_time >= IDLE_INTERVAL + random(-IDLE_VARIANCE, IDLE_VARIANCE)) {
+        /*if (current_time - last_idle_time >= IDLE_INTERVAL + random(-IDLE_VARIANCE, IDLE_VARIANCE)) {
             if (head_movement_type == HEAD_SIDE) {
                 head_looking_left = !head_looking_left;
                 head_rotation_next_position = head_looking_left ? 0.8f : 0.2f;
@@ -475,7 +430,8 @@ void animation_loop() {
             
             last_idle_time = current_time;
             idle_interval = 500 + random(-200, 200);  // Base 500ms ±200ms
-        }
+        }*/
+       updateIdleAnimation();
     }
     char cmdBuffer[MAX_COMMAND_LENGTH];
     String command = "";
@@ -547,12 +503,6 @@ void setup() {
     // Initialize Bottango
     BottangoCore::bottangoSetup();
     initializeServos();
-
-    // Bottango WebSocket
-    //bottangoWebSocket.begin(wsHost, wsPort, wsPath);
-    //bottangoWebSocket.onEvent(bottangoWebSocketEvent);
-    //bottangoWebSocket.setReconnectInterval(5000);
-    //bottangoWebSocket.enableHeartbeat(HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT, HEARTBEAT_RETRIES);
     
     // Audio WebSocket
     audioWebSocket.begin(wsHost, wsPortAudio, wsPathAudio);
@@ -594,7 +544,6 @@ void loop() {
     checkWiFiConnection();
     
     // Handle all WebSocket connections
-    //bottangoWebSocket.loop();
     audioWebSocket.loop();
     micWebSocket.loop();
         
