@@ -123,12 +123,7 @@ class AudioClient:
         self.CHANNELS = 1
         self.RATE = 24000
         self.running = True
-        
-        # Initialize robot driver
-        from robot_driver_websocket import BottangoDriver
-        self.robot = BottangoDriver()
-        self.robot.start_server_background()
-        
+                
         # State management
         self.is_recording = False
         self.is_speaking = False
