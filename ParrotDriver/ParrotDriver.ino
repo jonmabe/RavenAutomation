@@ -65,7 +65,7 @@ const int HEARTBEAT_RETRIES = 2;
 const float ENERGY_SMOOTHING = 0.5;
 const float ANIMATION_RESOLUTION = 0.250;
 const int IDLE_INTERVAL = 1500;  // 500ms
-const int IDLE_VARIANCE = 300;  // ±300ms
+const int IDLE_VARIANCE = 100;  // ±300ms
 const float HEAD_MOVEMENT_RANGE = 0.2;  // 20% movement range
 
 // Add animation state variables
@@ -418,19 +418,6 @@ void animation_loop() {
     last_animation_update = current_time;
     // Handle idle animations when not speaking
     if (!is_speaking) {
-        /*if (current_time - last_idle_time >= IDLE_INTERVAL + random(-IDLE_VARIANCE, IDLE_VARIANCE)) {
-            if (head_movement_type == HEAD_SIDE) {
-                head_looking_left = !head_looking_left;
-                head_rotation_next_position = head_looking_left ? 0.8f : 0.2f;
-                head_movement_type = (random(100) < 50) ? HEAD_TILT : HEAD_SIDE;
-            } else {
-                head_tilt_next_position = random(20, 80) / 100.0f;  // Random between 0.2 and 0.8
-                head_movement_type = HEAD_SIDE;
-            }
-            
-            last_idle_time = current_time;
-            idle_interval = 500 + random(-200, 200);  // Base 500ms ±200ms
-        }*/
        updateIdleAnimation();
     }
     char cmdBuffer[MAX_COMMAND_LENGTH];
@@ -446,7 +433,7 @@ void animation_loop() {
     
     if (wing_current_position != wing_next_position) {
         float delta = wing_next_position - wing_current_position;
-        wing_current_position += delta * 0.6f;
+        wing_current_position += delta * 0.3f;
         command = "sCI," + String(WING_PIN) + "," + String(wing_current_position * 8192);
         command.toCharArray(cmdBuffer, sizeof(cmdBuffer));        
         BottangoCore::processWebSocketCommand(cmdBuffer);
@@ -454,7 +441,7 @@ void animation_loop() {
     
     if (head_tilt_current_position != head_tilt_next_position) {
         float delta = head_tilt_next_position - head_tilt_current_position;
-        head_tilt_current_position += delta * 0.7f;
+        head_tilt_current_position += delta * 0.4f;
         command = "sCI," + String(HEAD_TILT_PIN) + "," + String(head_tilt_current_position * 8192);
         command.toCharArray(cmdBuffer, sizeof(cmdBuffer));        
         BottangoCore::processWebSocketCommand(cmdBuffer);
@@ -462,7 +449,7 @@ void animation_loop() {
     
     if (head_rotation_current_position != head_rotation_next_position) {
         float delta = head_rotation_next_position - head_rotation_current_position;
-        head_rotation_current_position += delta * 0.7f;
+        head_rotation_current_position += delta * 0.4f;
         command = "sCI," + String(HEAD_ROTATION_PIN) + "," + String(head_rotation_current_position * 8192);
         command.toCharArray(cmdBuffer, sizeof(cmdBuffer));        
         BottangoCore::processWebSocketCommand(cmdBuffer);

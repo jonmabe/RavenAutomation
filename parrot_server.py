@@ -219,10 +219,7 @@ class AudioClient:
                 while True:
                     try:
                         data = await websocket.receive_bytes()
-                        if not self.is_speaking:
-                            # Boost the gain
-                            boosted_data = await self.process_audio_chunk(data)
-                            
+                        if not self.is_speaking:                         
                             # Store the original audio chunk for WAV file
                             self.current_audio_chunks.append(data)
                             
@@ -361,7 +358,6 @@ class AudioClient:
                         self.is_speaking = True
                         audio_data = base64.b64decode(audio_base64)
                         audio_length = len(audio_data)/self.RATE
-                        print(f"Received {audio_length:.3f}s of audio")
                         
                         if USE_WEBSOCKET_AUDIO:
                             await self.stream_to_speakers(audio_data)
@@ -491,28 +487,6 @@ class AudioClient:
         except Exception as e:
             print(f"Error in microphone processing: {e}")
             traceback.print_exc()
-
-    async def process_audio_chunk(self, data: bytes) -> bytes:
-        """Boost audio gain before sending to OpenAI"""
-        try:
-            # Convert bytes to numpy array
-            audio = np.frombuffer(data, dtype=np.int16)
-            
-            # Apply fixed gain (adjust this value as needed)
-            gain = 10.0  # Start with 4x amplification
-            audio = audio.astype(np.float32) * gain
-            
-            # Clip to prevent distortion
-            audio = np.clip(audio, -32768, 32767)
-            
-            # Convert back to int16
-            audio = audio.astype(np.int16)
-            
-            return audio.tobytes()
-            
-        except Exception as e:
-            print(f"Error processing audio: {e}")
-            return data
 
 # Create FastAPI app for audio websocket
 audio_app = FastAPI()
