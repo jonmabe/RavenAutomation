@@ -12,3 +12,4 @@ logs/
 .DS_Store
 __pycache__/
 mic_recordings/
+.vscode/
