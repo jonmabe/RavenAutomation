@@ -59,6 +59,42 @@ bool wsCommandInProgress = false;
 unsigned long wsTimeOfLastChar = 0;
 const unsigned long WIFI_CHECK_INTERVAL = 30000;
 
+// Add these constants at the top
+const int HEARTBEAT_INTERVAL = 15000; // 15 seconds
+const int HEARTBEAT_TIMEOUT = 3000;   // 3 seconds
+const int HEARTBEAT_RETRIES = 2;
+
+// Add animation parameters near other constants
+const float ENERGY_SMOOTHING = 0.5;
+const float ANIMATION_RESOLUTION = 0.250;
+const int IDLE_INTERVAL = 500;  // 500ms
+const int IDLE_VARIANCE = 300;  // ±300ms
+const float HEAD_MOVEMENT_RANGE = 0.2;  // 20% movement range
+
+// Add animation state variables
+float mouth_next_position = 0.0;
+float mouth_current_position = 0.0;
+float wing_next_position = 0.0;
+float wing_current_position = 0.0;
+float head_tilt_next_position = 0.0;
+float head_tilt_current_position = 0.0;
+float head_rotation_next_position = 0.0;
+float head_rotation_current_position = 0.0;
+float last_energy = 0.0;
+bool head_looking_left = true;
+unsigned long last_idle_time = 0;
+
+const uint8_t HEAD_SIDE = 0;
+const uint8_t HEAD_TILT = 1;
+
+// Add these variables with other state variables
+uint8_t head_movement_type = HEAD_SIDE;
+bool is_speaking = false;
+unsigned long idle_interval = 500;  // Base interval of 500ms
+
+// Add a timestamp for animation updates
+unsigned long last_animation_update = 0;
+
 // Add I2S configuration functions
 void configureI2S() {
     const uint32_t SAMPLE_RATE = 24000;
@@ -262,11 +298,17 @@ void audioWebSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
             
         case WStype_BIN:
             if (isConfigured) {
-                const size_t MAX_CHUNK = 512;  // Process in smaller chunks
+                const size_t MAX_CHUNK = 512;
                 size_t processed = 0;
                 
                 while (processed < length) {
+                    is_speaking = true;
                     size_t chunk_size = min(MAX_CHUNK, length - processed);
+                    
+                    // Calculate animation for this chunk
+                    calculateAnimationPositions(payload + processed, chunk_size);
+                    
+                    // Create stereo buffer and process audio as before
                     size_t stereo_length = chunk_size * 2;
                     uint8_t* stereo_buffer = (uint8_t*)malloc(stereo_length);
                     
@@ -287,11 +329,11 @@ void audioWebSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
                     }
                     
                     processed += chunk_size;
-                    // Small delay between chunks to prevent overwhelming the system
                     if (processed < length) {
                         delay(1);
                     }
                 }
+                is_speaking = false;
             }
             break;
     }
@@ -317,7 +359,6 @@ void micWebSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 }
 
 void initializeServos() {
-    BottangoCore::initialized = true;
     BottangoCore::effectorPool.dump();
     Callbacks::onThisControllerStarted();
 
@@ -336,12 +377,141 @@ void initializeServos() {
         BottangoCore::processWebSocketCommand(cmdBuffer);
         delay(100);
     }
+    BottangoCore::initialized = true;
 }
 
-// Add these constants at the top
-const int HEARTBEAT_INTERVAL = 15000; // 15 seconds
-const int HEARTBEAT_TIMEOUT = 3000;   // 3 seconds
-const int HEARTBEAT_RETRIES = 2;
+// Add animation helper functions
+void calculateAnimationPositions(uint8_t* audio_data, size_t length) {
+    // Convert audio bytes to int16 samples
+    int16_t* samples = (int16_t*)audio_data;
+    size_t sample_count = length / 2;
+    
+    // Calculate amplitude using percentile-like approach
+    int32_t sorted_samples[sample_count];
+    for (size_t i = 0; i < sample_count; i++) {
+        sorted_samples[i] = abs(samples[i]);
+    }
+    
+    // Simple bubble sort for the 80th percentile (not efficient but works for small samples)
+    size_t percentile_index = (sample_count * 80) / 100;
+    for (size_t i = 0; i < percentile_index; i++) {
+        for (size_t j = 0; j < sample_count - 1; j++) {
+            if (sorted_samples[j] > sorted_samples[j + 1]) {
+                int32_t temp = sorted_samples[j];
+                sorted_samples[j] = sorted_samples[j + 1];
+                sorted_samples[j + 1] = temp;
+            }
+        }
+    }
+    float amplitude = sorted_samples[percentile_index];
+    
+    // Calculate energy and smooth it
+    float current_energy = min(1.0f, amplitude / 2000.0f);
+    float smoothed_energy = (current_energy * (1.0f - ENERGY_SMOOTHING) + 
+                           last_energy * ENERGY_SMOOTHING);
+    last_energy = smoothed_energy;
+    
+    // Mouth movement (inverted: 0 = open, 1 = closed)
+    mouth_next_position = (amplitude > 800) ? random(0, 50) / 100.0f : 1.0f;
+    
+    // Wing movement
+    float wing_energy = smoothed_energy * 1.2f;
+    float wing_base = 0.2f;
+    float wing_random = random(-10, 10) / 100.0f;
+    wing_next_position = constrain(wing_base + wing_energy * 0.8f + wing_random, 0.0f, 1.0f);
+    
+    // Head tilt
+    float tilt_energy = smoothed_energy * 0.3f;
+    head_tilt_next_position = 0.4f + tilt_energy * 0.6f;
+    
+    // Head rotation
+    head_rotation_next_position = 0.5f + random(-10, 10) / 100.0f;
+}
+
+void updateIdleAnimation() {
+    unsigned long current_time = millis();
+    
+    // Check if it's time for a new idle movement
+    if (current_time - last_idle_time >= IDLE_INTERVAL + random(-IDLE_VARIANCE, IDLE_VARIANCE)) {
+        // Alternate head looking left and right
+        head_looking_left = !head_looking_left;
+        head_rotation_next_position = head_looking_left ? 0.3f : 0.7f;
+        
+        // Random head tilt
+        head_tilt_next_position = 0.5f + random(-15, 15) / 100.0f;
+        
+        // Occasional wing movement
+        if (random(100) < 30) {  // 30% chance
+            wing_next_position = random(20, 40) / 100.0f;
+        } else {
+            wing_next_position = 0.0f;
+        }
+        
+        // Mouth stays mostly closed
+        mouth_next_position = random(0, 10) / 100.0f;
+        
+        last_idle_time = current_time;
+    }
+}
+
+void animation_loop() {
+    unsigned long current_time = millis();
+
+    if (current_time - last_animation_update < ANIMATION_RESOLUTION)
+        return;
+    
+    last_animation_update = current_time;
+    // Handle idle animations when not speaking
+    if (!is_speaking) {
+        if (current_time - last_idle_time >= IDLE_INTERVAL + random(-IDLE_VARIANCE, IDLE_VARIANCE)) {
+            if (head_movement_type == HEAD_SIDE) {
+                head_looking_left = !head_looking_left;
+                head_rotation_next_position = head_looking_left ? 0.8f : 0.2f;
+                head_movement_type = (random(100) < 50) ? HEAD_TILT : HEAD_SIDE;
+            } else {
+                head_tilt_next_position = random(20, 80) / 100.0f;  // Random between 0.2 and 0.8
+                head_movement_type = HEAD_SIDE;
+            }
+            
+            last_idle_time = current_time;
+            idle_interval = 500 + random(-200, 200);  // Base 500ms ±200ms
+        }
+    }
+    char cmdBuffer[MAX_COMMAND_LENGTH];
+    String command = "";
+    // Update positions with smooth movements
+    if (mouth_current_position != mouth_next_position) {
+        mouth_current_position = mouth_next_position;
+
+        command = "sCI," + String(MOUTH_PIN) + "," + String(mouth_current_position * 8192);
+        command.toCharArray(cmdBuffer, sizeof(cmdBuffer));        
+        BottangoCore::processWebSocketCommand(cmdBuffer);
+    }
+    
+    if (wing_current_position != wing_next_position) {
+        float delta = wing_next_position - wing_current_position;
+        wing_current_position += delta * 0.6f;
+        command = "sCI," + String(WING_PIN) + "," + String(wing_current_position * 8192);
+        command.toCharArray(cmdBuffer, sizeof(cmdBuffer));        
+        BottangoCore::processWebSocketCommand(cmdBuffer);
+    }
+    
+    if (head_tilt_current_position != head_tilt_next_position) {
+        float delta = head_tilt_next_position - head_tilt_current_position;
+        head_tilt_current_position += delta * 0.7f;
+        command = "sCI," + String(HEAD_TILT_PIN) + "," + String(head_tilt_current_position * 8192);
+        command.toCharArray(cmdBuffer, sizeof(cmdBuffer));        
+        BottangoCore::processWebSocketCommand(cmdBuffer);
+    }
+    
+    if (head_rotation_current_position != head_rotation_next_position) {
+        float delta = head_rotation_next_position - head_rotation_current_position;
+        head_rotation_current_position += delta * 0.7f;
+        command = "sCI," + String(HEAD_ROTATION_PIN) + "," + String(head_rotation_current_position * 8192);
+        command.toCharArray(cmdBuffer, sizeof(cmdBuffer));        
+        BottangoCore::processWebSocketCommand(cmdBuffer);
+    }
+}
 
 void setup() {
     Serial.begin(115200);
@@ -377,12 +547,12 @@ void setup() {
     // Initialize Bottango
     BottangoCore::bottangoSetup();
     initializeServos();
-    
+
     // Bottango WebSocket
-    bottangoWebSocket.begin(wsHost, wsPort, wsPath);
-    bottangoWebSocket.onEvent(bottangoWebSocketEvent);
-    bottangoWebSocket.setReconnectInterval(5000);
-    bottangoWebSocket.enableHeartbeat(HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT, HEARTBEAT_RETRIES);
+    //bottangoWebSocket.begin(wsHost, wsPort, wsPath);
+    //bottangoWebSocket.onEvent(bottangoWebSocketEvent);
+    //bottangoWebSocket.setReconnectInterval(5000);
+    //bottangoWebSocket.enableHeartbeat(HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT, HEARTBEAT_RETRIES);
     
     // Audio WebSocket
     audioWebSocket.begin(wsHost, wsPortAudio, wsPathAudio);
@@ -424,15 +594,10 @@ void loop() {
     checkWiFiConnection();
     
     // Handle all WebSocket connections
-    bottangoWebSocket.loop();
+    //bottangoWebSocket.loop();
     audioWebSocket.loop();
     micWebSocket.loop();
-    
-    // Handle Bottango updates
-    if (BottangoCore::initialized) {
-        BottangoCore::effectorPool.updateAllDriveTargets();
-    }
-    
+        
     // Handle microphone data with rate limiting
     static unsigned long lastMicRead = 0;
     const unsigned long MIC_READ_INTERVAL = 20;  // 20ms between reads
@@ -485,6 +650,11 @@ void loop() {
         wsTimeOfLastChar = 0;
     }
     
-    // Increased delay to give more time for system tasks
+    animation_loop();
+
+    if (BottangoCore::initialized) {
+        BottangoCore::effectorPool.updateAllDriveTargets();
+    }
+    
     delay(2);
 }

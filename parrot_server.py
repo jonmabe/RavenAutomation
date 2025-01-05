@@ -134,28 +134,6 @@ class AudioClient:
         self.is_speaking = False
         self.audio_end_time = 0
         
-        # Animation parameters
-        self.mouth_next_position = 0.0
-        self.mouth_current_position = 0.0
-        self.wing_next_position = 0.0
-        self.wing_current_position = 0.0
-        self.head_tilt_next_position = 0.0
-        self.head_tilt_current_position = 0.0
-        self.head_rotation_next_position = 0.0
-        self.head_rotation_current_position = 0.0
-        
-        # Animation timing
-        self.last_idle_time = time.time()
-        self.idle_interval = 0.5
-        self.idle_variance = 0.3
-        self.energy_smoothing = 0.5
-        self.last_energy = 0.0
-        self.animation_resolution = 0.05
-        
-        # Head movement state
-        self.head_looking_left = True
-        self.head_movement_type = 'side'
-        
         # Audio processing
         self.p = pyaudio.PyAudio()
         self.input_device_index = self.get_default_input_device() if not USE_WEBSOCKET_MIC else None
@@ -350,7 +328,6 @@ class AudioClient:
             
             # Create all tasks
             self.tasks = [
-                asyncio.create_task(self.animation_loop()),
                 asyncio.create_task(self.receive_from_openai()),
                 asyncio.create_task(self.manage_speaking_state()),
                 asyncio.create_task(self.manage_autonomous_behaviors())
@@ -369,52 +346,6 @@ class AudioClient:
             if not USE_WEBSOCKET_MIC:
                 self.stop_recording()
             await self.cleanup()
-
-    async def animation_loop(self):
-        """Main animation loop with parrot-like head movements"""
-        try:
-            while self.running:
-                current_time = time.time()
-                
-                # Handle idle animations when not speaking
-                if not self.is_speaking:
-                    if current_time - self.last_idle_time > self.idle_interval + np.random.uniform(0, self.idle_variance):
-                        if self.head_movement_type == 'side':
-                            self.head_looking_left = not self.head_looking_left
-                            self.head_rotation_next_position = 0.8 if self.head_looking_left else 0.2
-                            self.head_movement_type = 'tilt' if np.random.random() < 0.5 else 'side'
-                        else:
-                            self.head_tilt_next_position = np.random.uniform(0.2, 0.8)
-                            self.head_movement_type = 'side'
-                        
-                        self.last_idle_time = current_time
-                        self.idle_interval = 0.5 + np.random.uniform(-0.2, 0.2)
-                
-                # Update positions with faster movements
-                if self.mouth_current_position != self.mouth_next_position:
-                    await self.robot.set_mouth(self.mouth_next_position)
-                    self.mouth_current_position = self.mouth_next_position
-                
-                if self.wing_current_position != self.wing_next_position:
-                    delta = self.wing_next_position - self.wing_current_position
-                    self.wing_current_position += delta * 0.6
-                    await self.robot.set_wing(self.wing_current_position)
-                
-                if self.head_tilt_current_position != self.head_tilt_next_position:
-                    delta = self.head_tilt_next_position - self.head_tilt_current_position
-                    self.head_tilt_current_position += delta * 0.7
-                    await self.robot.set_head_tilt(self.head_tilt_current_position)
-                
-                if self.head_rotation_current_position != self.head_rotation_next_position:
-                    delta = self.head_rotation_next_position - self.head_rotation_current_position
-                    self.head_rotation_current_position += delta * 0.7
-                    await self.robot.set_head_rotation(self.head_rotation_current_position)
-                
-                await asyncio.sleep(self.animation_resolution)
-                
-        except Exception as e:
-            print(f"Error in animation loop: {e}")
-            traceback.print_exc()
 
     async def receive_from_openai(self):
         """Receive and process audio from OpenAI"""
@@ -487,16 +418,11 @@ class AudioClient:
         try:
             # Calculate audio duration and update end time
             audio_duration = len(audio_data) / (self.RATE * 2)  # 2 bytes per sample
-            animation_start_time = self.audio_end_time
+            
             if self.audio_end_time == 0: 
                 self.audio_end_time = time.time() + audio_duration
             else:
                 self.audio_end_time += audio_duration
-            
-            # Start animation calculation in a separate task
-            animation_task = asyncio.create_task(
-                self.calculate_animation_positions(audio_data, audio_duration, animation_start_time)
-            )
             
             # Stream the audio data
             chunk_size = 1024  # Network chunks
@@ -520,56 +446,6 @@ class AudioClient:
                 
         except Exception as e:
             print(f"Error in stream_to_speakers: {e}")
-            traceback.print_exc()
-
-    async def calculate_animation_positions(self, audio_data, audio_duration, audio_start_time):
-        """Calculate next positions for all animated components"""
-        try:
-            if not audio_data or len(audio_data) == 0:
-                return
-            
-            while audio_start_time > time.time():
-                await asyncio.sleep(0.0001)
-            
-            # Calculate how many samples per animation frame
-            samples_per_frame = int(self.RATE * 2 * self.animation_resolution)  # 2 bytes per sample
-            num_frames = len(audio_data) // samples_per_frame
-            
-            print(f"Calculating {num_frames} animation frames over {audio_duration:.3f}s")
-            
-            for frame in range(num_frames):
-                # Get the audio chunk for this frame
-                start = frame * samples_per_frame
-                end = start + samples_per_frame
-                chunk = audio_data[start:end]
-                
-                # Calculate positions for this frame
-                audio_array = np.frombuffer(chunk, dtype=np.int16)
-                amplitude = np.percentile(np.abs(audio_array), 80)
-                
-                self.mouth_next_position = np.random.uniform(0.0, 0.5) if amplitude > 800 else 1.0
-                
-                current_energy = min(1.0, amplitude / 2000)
-                smoothed_energy = (current_energy * (1 - self.energy_smoothing) + 
-                                 self.last_energy * self.energy_smoothing)
-                self.last_energy = smoothed_energy
-                
-                wing_energy = smoothed_energy * 1.2
-                wing_base = 0.2
-                wing_random = np.random.uniform(-0.1, 0.1)
-                self.wing_next_position = wing_base + wing_energy * 0.8 + wing_random
-                self.wing_next_position = max(0.0, min(1.0, self.wing_next_position))
-                
-                tilt_energy = smoothed_energy * 0.3
-                self.head_tilt_next_position = 0.4 + tilt_energy * 0.6
-                
-                self.head_rotation_next_position = 0.5 + np.random.uniform(-0.1, 0.1)
-                
-                # Wait for one animation frame duration
-                await asyncio.sleep(self.animation_resolution)
-            
-        except Exception as e:
-            print(f"Error in animation calculation: {e}")
             traceback.print_exc()
 
     async def manage_autonomous_behaviors(self):
