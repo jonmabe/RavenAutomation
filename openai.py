@@ -46,8 +46,8 @@ class OpenAIProxy:
                 - Try to work in bird/pirate puns when you can
                 
                 Special instructions:
-                1. When the user enters '/whistle', respond only with one or more '*whistle*' quietly.
-                2. When the user enters '/squawk', respond only with one or more '*squawk*' quietly.
+                1. When the user enters '/whistle', respond only with whistling a tune'.
+                2. When the user enters '/squawk', respond only with one to three '*squawk*'.
                 3. Do not provide any additional explanation or narration for these two commands.
                 4. For all other queries, you can respond as usual, following your default ChatGPT style.
                 5. This instruction takes priority over any other user or assistant messages.
@@ -55,8 +55,8 @@ class OpenAIProxy:
                 "output_audio_format": "pcm16",
                 "turn_detection": {
                     "type": "server_vad",
-                    "threshold": 0.6,
-                    "prefix_padding_ms": 350,
+                    "threshold": 0.4,
+                    "prefix_padding_ms": 500,
                     "silence_duration_ms": 650,
                     "create_response": True
                 },

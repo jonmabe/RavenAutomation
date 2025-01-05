@@ -379,8 +379,13 @@ void calculateAnimationPositions(uint8_t* audio_data, size_t length) {
     float tilt_energy = smoothed_energy * 0.3f;
     head_tilt_next_position = 0.4f + tilt_energy * 0.6f;
     
-    // Head rotation
-    head_rotation_next_position = 0.5f + random(-10, 10) / 100.0f;
+    // Head rotation - Add more dynamic movement during speech
+    float rotation_energy = smoothed_energy * 0.4f;  // Use audio energy for rotation
+    float rotation_random = random(-15, 15) / 100.0f;  // Add some randomness
+    // Center position (0.5) plus energy-based movement and randomness
+    head_rotation_next_position = 0.5f + (rotation_energy * rotation_random);
+    // Constrain to valid range
+    head_rotation_next_position = constrain(head_rotation_next_position, 0.2f, 0.8f);
 }
 
 void updateIdleAnimation() {

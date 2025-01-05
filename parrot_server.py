@@ -53,34 +53,35 @@ class BehaviorManager:
                 frequency=0.4,
                 min_silence=20.0,
                 cooldown=180.0
+            ),
+            ParrotBehavior(
+                name="cracker",
+                prompt="Ask for a cracker in a creative or funny way.",
+                frequency=0.3,
+                min_silence=10.0
+            ),
+            ParrotBehavior(
+                name="story",
+                prompt="Offer to tell a very short story about your adventures as a pirate parrot.",
+                frequency=0.4,
+                min_silence=15.0,
+                cooldown=120.0
+            ),
+            ParrotBehavior(
+                name="joke",
+                prompt="Offer to tell a short bird or pirate related joke.",
+                frequency=0.5,
+                min_silence=12.0,
+                cooldown=60.0
+            ),
+            ParrotBehavior(
+                name="observation",
+                prompt="Make a cheeky observation about the room or the situation.",
+                frequency=0.6,
+                min_silence=8.0
             )
         ]
-        #ParrotBehavior(
-        #    name="cracker",
-        #    prompt="Ask for a cracker in a creative or funny way.",
-        #    frequency=0.3,
-        #    min_silence=10.0
-        #),
-        #ParrotBehavior(
-        #    name="story",
-        #    prompt="Offer to tell a very short story about your adventures as a pirate parrot.",
-        #    frequency=0.4,
-        #    min_silence=15.0,
-        #    cooldown=120.0
-        #),
-        #ParrotBehavior(
-        #    name="joke",
-        #    prompt="Offer to tell a short bird or pirate related joke.",
-        #    frequency=0.5,
-        #    min_silence=12.0,
-        #    cooldown=60.0
-        #),
-        #ParrotBehavior(
-        #    name="observation",
-        #    prompt="Make a cheeky observation about the room or the situation.",
-        #    frequency=0.6,
-        #    min_silence=8.0
-        #),
+        
         
         self.last_interaction = time.time()
         self.base_probability = 0.2  # Base chance of any behavior triggering
@@ -156,7 +157,7 @@ class AudioClient:
         # Add audio recording buffers
         self.current_audio_chunks = []
         self.recordings_dir = "mic_recordings"
-        self.save_recordings = True
+        self.save_recordings = False
         os.makedirs(self.recordings_dir, exist_ok=True)
         
         # Add audio processing parameters
