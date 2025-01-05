@@ -91,10 +91,33 @@ const int HEAD_ROTATION_PIN = 12;
 
 ### Audio Pins (ParrotDriver.ino)
 ```cpp
+// I2S Speaker pins
 const int I2S_BCLK = 18;
 const int I2S_LRC = 19;
 const int I2S_DOUT = 23;
+
+// I2S Microphone pins
+const int I2S_MIC_SCK = 16;
+const int I2S_MIC_WS = 17;
+const int I2S_MIC_SD = 21;
 ```
+
+### Pin Connection Guide
+- **Servos**
+  - Mouth servo → GPIO27
+  - Head tilt servo → GPIO14
+  - Wing servo → GPIO13
+  - Head rotation servo → GPIO12
+
+- **I2S Speaker**
+  - BCLK → GPIO18
+  - LRC/WS → GPIO19
+  - DIN → GPIO23
+
+- **I2S Microphone**
+  - SCK → GPIO16
+  - WS → GPIO17
+  - SD → GPIO21
 
 ### Network Configuration
 The ESP32 uses WiFiManager for initial setup. On first boot:
