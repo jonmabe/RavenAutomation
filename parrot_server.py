@@ -9,7 +9,7 @@ import json
 import time
 import uvicorn
 from typing import Set, Optional, List, Callable
-from openai import OpenAIProxy  # Replace FastAPI WebSocket client with direct OpenAI proxy
+from voice_factory import VoiceBackendFactory
 from dataclasses import dataclass
 import random
 import wave
@@ -142,8 +142,8 @@ class AudioClient:
         # Tasks
         self.tasks = []
         
-        # Initialize OpenAI connection
-        self.openai = OpenAIProxy()
+        # Initialize voice backend
+        self.voice_backend = VoiceBackendFactory.create_backend()
         
         # Behavior management
         self.behavior_manager = BehaviorManager()
@@ -184,9 +184,17 @@ class AudioClient:
 
     async def setup(self):
         """Initialize all async components"""
-        # Connect to OpenAI
-        await self.openai.connect()
-        print("Connected to OpenAI")
+        # Connect to voice backend
+        await self.voice_backend.connect()
+        print(f"Connected to {type(self.voice_backend).__name__}")
+        
+        # Set up callbacks
+        self.voice_backend.set_audio_callback(self._handle_audio_output)
+        self.voice_backend.set_transcript_callback(self._handle_transcript)
+        self.voice_backend.set_error_callback(self._handle_error)
+        
+        # Start session
+        await self.voice_backend.start_session()
         
         # Start the FastAPI server for audio WebSocket
         if USE_WEBSOCKET_AUDIO:
@@ -220,7 +228,7 @@ class AudioClient:
                             self.current_audio_chunks.append(data)
                             
                             # Send boosted audio to OpenAI
-                            await self.openai.send_audio(data)
+                            await self.voice_backend.send_audio(data)
                     except Exception as e:
                         print(f"Error in microphone websocket: {e}")
                         break
@@ -321,7 +329,6 @@ class AudioClient:
             
             # Create all tasks
             self.tasks = [
-                asyncio.create_task(self.receive_from_openai()),
                 asyncio.create_task(self.manage_speaking_state()),
                 asyncio.create_task(self.manage_autonomous_behaviors())
             ]
@@ -340,50 +347,52 @@ class AudioClient:
                 self.stop_recording()
             await self.cleanup()
 
-    async def receive_from_openai(self):
-        """Receive and process audio from OpenAI"""
+    async def _handle_audio_output(self, audio_data: bytes):
+        """Handle audio output from voice backend"""
         try:
-            while self.running:
-                response = await self.openai.receive()
-                response_data = json.loads(response)
-                response_type = response_data.get("type", "")
-
-                if "response.audio.delta" in response_type:
-                    audio_base64 = response_data.get("delta", "")
-                    if audio_base64:
-                        self.is_speaking = True
-                        audio_data = base64.b64decode(audio_base64)
-                        audio_length = len(audio_data)/self.RATE
-                        
-                        if USE_WEBSOCKET_AUDIO:
-                            await self.stream_to_speakers(audio_data)
-                        else:
-                            # Handle local playback if implemented
-                            pass
-                    self.last_automation_input = time.time()
-                elif response_type == "input_audio_buffer.speech_started":
-                    self.current_audio_chunks = []  # Clear buffer for new recording
-                    self.last_automation_input = time.time()
-                elif response_type == "input_audio_buffer.speech_stopped":
-                    # Save the recorded audio to a WAV file
-                    if self.save_recordings and self.current_audio_chunks:
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        filename = os.path.join(self.recordings_dir, f"mic_recording_{timestamp}.wav")
-                        
-                        with wave.open(filename, 'wb') as wav_file:
-                            wav_file.setnchannels(self.CHANNELS)
-                            wav_file.setsampwidth(2)  # 16-bit audio
-                            wav_file.setframerate(self.RATE)
-                            wav_file.writeframes(b''.join(self.current_audio_chunks))
-                        
-                        print(f"Saved recording to {filename}")
-                        self.current_audio_chunks = []  # Clear the buffer
-                elif response_type == "response.done":
-                    pass
-                        
+            print(f"[AUDIO] Received audio chunk: {len(audio_data)} bytes")
+            self.is_speaking = True
+            self.last_automation_input = time.time()
+            
+            if USE_WEBSOCKET_AUDIO:
+                print(f"[AUDIO] Streaming to {len(self.active_audio_connections)} ESP32 clients")
+                await self.stream_to_speakers(audio_data)
+            else:
+                # Handle local playback if implemented
+                print("[AUDIO] Local playback not implemented")
+                pass
         except Exception as e:
-            print(f"Error in receive audio: {e}")
+            print(f"Error handling audio output: {e}")
             traceback.print_exc()
+    
+    async def _handle_transcript(self, role: str, text: str):
+        """Handle transcript from voice backend"""
+        print(f"{role}: {text}")
+        
+        # Handle speech events for recording
+        if role == "user" and text:
+            # User started speaking
+            self.current_audio_chunks = []  # Clear buffer for new recording
+            self.last_automation_input = time.time()
+        elif role == "user" and not text:
+            # User stopped speaking - save recording if enabled
+            if self.save_recordings and self.current_audio_chunks:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = os.path.join(self.recordings_dir, f"mic_recording_{timestamp}.wav")
+                
+                with wave.open(filename, 'wb') as wav_file:
+                    wav_file.setnchannels(self.CHANNELS)
+                    wav_file.setsampwidth(2)  # 16-bit audio
+                    wav_file.setframerate(self.RATE)
+                    wav_file.writeframes(b''.join(self.current_audio_chunks))
+                
+                print(f"Saved recording to {filename}")
+                self.current_audio_chunks = []  # Clear the buffer
+    
+    async def _handle_error(self, error: str):
+        """Handle errors from voice backend"""
+        print(f"Voice backend error: {error}")
+        # Optionally implement reconnection logic here
 
     async def manage_speaking_state(self):
         """Manage speaking state based on audio timing"""
@@ -404,8 +413,10 @@ class AudioClient:
     async def stream_to_speakers(self, audio_data):
         """Stream audio data to all connected ESP32 clients"""
         if not self.active_audio_connections:
-            print("No ESP32 audio clients connected")
+            print("[AUDIO] ERROR: No ESP32 audio clients connected! Cannot play audio.")
             return
+        
+        print(f"[AUDIO] Starting stream of {len(audio_data)} bytes to speakers")
             
         try:
             # Calculate audio duration and update end time
@@ -435,6 +446,8 @@ class AudioClient:
                 
                 # Minimal delay to prevent overwhelming the connection
                 await asyncio.sleep(0.0005)
+            
+            print(f"[AUDIO] Finished streaming {len(audio_data)} bytes to speakers")
                 
         except Exception as e:
             print(f"Error in stream_to_speakers: {e}")
@@ -452,7 +465,7 @@ class AudioClient:
                     if behavior:
                         print(f"Triggering autonomous behavior: {behavior.name}")
                         # Send behavior prompt to OpenAI
-                        await self.openai.send_text("autonomous_command: " + behavior.prompt)
+                        await self.voice_backend.send_text("autonomous_command: " + behavior.prompt)
                         # Reset silence timer
                         self.last_automation_input = current_time
                         
