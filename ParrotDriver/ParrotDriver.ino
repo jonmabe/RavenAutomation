@@ -38,7 +38,8 @@ const i2s_port_t I2S_MIC_PORT = I2S_NUM_1;
 const int BUFFER_SIZE = 1024;
 const int DMA_BUFFER_COUNT = 8;
 const size_t MIC_BUFFER_SIZE = 1024;
-int16_t micBuffer[MIC_BUFFER_SIZE];
+int32_t micBuffer32[MIC_BUFFER_SIZE];  // 32-bit buffer for I2S input
+int16_t micBuffer16[MIC_BUFFER_SIZE];  // 16-bit buffer for WebSocket output
 
 // Add a simple moving average filter
 const int FILTER_SIZE = 4;
@@ -190,47 +191,6 @@ void setupMicI2S() {
     err = i2s_set_clk(I2S_MIC_PORT, 24000, I2S_BITS_PER_SAMPLE_32BIT, I2S_CHANNEL_MONO);
     if (err != ESP_OK) {
         Serial.printf("Failed to set I2S clock: %d\n", err);
-    }
-
-    // Let's increase the gain in our 32-bit to 16-bit conversion
-    // Modify the microphone reading code in loop()
-    if (micWebSocket.isConnected()) {
-        size_t bytes_read = 0;
-        esp_err_t result = i2s_read(I2S_MIC_PORT, micBuffer, sizeof(micBuffer), &bytes_read, 0);
-        
-        if (result == ESP_OK && bytes_read > 0) {
-            // Convert 32-bit samples to 16-bit with proper scaling
-            int32_t* samples32 = (int32_t*)micBuffer;
-            int16_t* samples16 = (int16_t*)micBuffer;
-            size_t sample_count = bytes_read / 4;  // 4 bytes per 32-bit sample
-            
-            for (size_t i = 0; i < sample_count; i++) {
-                // Scale down 32-bit to 16-bit with increased gain
-                int32_t sample = samples32[i] >> 12;
-                
-                // Apply moving average filter
-                filter_buffer[filter_index] = sample;
-                filter_index = (filter_index + 1) % FILTER_SIZE;
-                
-                int32_t filtered_sample = 0;
-                for (int j = 0; j < FILTER_SIZE; j++) {
-                    filtered_sample += filter_buffer[j];
-                }
-                filtered_sample /= FILTER_SIZE;
-                
-                // Apply gain after filtering
-                filtered_sample = (filtered_sample * 3) >> 1;  // 1.5x gain
-                
-                // Clip to prevent distortion
-                filtered_sample = constrain(filtered_sample, -32768, 32767);
-                
-                // Store the filtered sample
-                samples16[i] = (int16_t)filtered_sample;
-            }
-            
-            // Send the 16-bit samples
-            micWebSocket.sendBIN((uint8_t*)samples16, sample_count * 2);
-        }
     }
 }
 
@@ -545,17 +505,15 @@ void loop() {
     
     if (micWebSocket.isConnected() && millis() - lastMicRead >= MIC_READ_INTERVAL) {
         size_t bytes_read = 0;
-        esp_err_t result = i2s_read(I2S_MIC_PORT, micBuffer, sizeof(micBuffer), &bytes_read, 0);
+        esp_err_t result = i2s_read(I2S_MIC_PORT, micBuffer32, sizeof(micBuffer32), &bytes_read, 0);
         
         if (result == ESP_OK && bytes_read > 0) {
             // Convert 32-bit samples to 16-bit with proper scaling
-            int32_t* samples32 = (int32_t*)micBuffer;
-            int16_t* samples16 = (int16_t*)micBuffer;
             size_t sample_count = bytes_read / 4;  // 4 bytes per 32-bit sample
             
             for (size_t i = 0; i < sample_count; i++) {
-                // Scale down 32-bit to 16-bit with increased gain
-                int32_t sample = samples32[i] >> 12;
+                // Get 32-bit sample and scale down to 16-bit with better gain
+                int32_t sample = micBuffer32[i] >> 8;  // Better scaling (was >>12)
                 
                 // Apply moving average filter
                 filter_buffer[filter_index] = sample;
@@ -567,18 +525,18 @@ void loop() {
                 }
                 filtered_sample /= FILTER_SIZE;
                 
-                // Apply gain after filtering
-                filtered_sample = (filtered_sample * 3) >> 1;  // 1.5x gain
+                // Apply moderate gain after filtering
+                filtered_sample = (filtered_sample * 5) >> 3;  // 0.625x gain (reduced from 1.5x)
                 
                 // Clip to prevent distortion
                 filtered_sample = constrain(filtered_sample, -32768, 32767);
                 
-                // Store the filtered sample
-                samples16[i] = (int16_t)filtered_sample;
+                // Store the filtered sample in the 16-bit buffer
+                micBuffer16[i] = (int16_t)filtered_sample;
             }
             
             // Send the 16-bit samples
-            micWebSocket.sendBIN((uint8_t*)samples16, sample_count * 2);
+            micWebSocket.sendBIN((uint8_t*)micBuffer16, sample_count * 2);
             lastMicRead = millis();
         }
     }
