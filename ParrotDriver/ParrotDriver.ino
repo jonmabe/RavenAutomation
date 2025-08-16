@@ -762,11 +762,11 @@ void loop() {
                 if (micBuffer32[i] < minVal) minVal = micBuffer32[i];
             }
             
-            // Only log if we have actual audio data
+            // Only process if we have actual audio data
             if (maxVal != 0 || minVal != 0) {
-                // Show the actual 32-bit range we're getting
-                Serial.println("Mic raw range: " + String(minVal) + " to " + String(maxVal) + 
-                              " (bytes: " + String(bytes_read) + ")");
+                // Comment out the noisy mic logging
+                // Serial.println("Mic raw range: " + String(minVal) + " to " + String(maxVal) + 
+                //               " (bytes: " + String(bytes_read) + ")");
                 
                 // Light up mic LED only for voice-level audio
                 // Voice typically ranges from 5-50 million in our 32-bit range
