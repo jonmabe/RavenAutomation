@@ -452,9 +452,14 @@ class AudioClient:
                     if behavior:
                         print(f"Triggering autonomous behavior: {behavior.name}")
                         # Send behavior prompt to OpenAI
-                        await self.openai.send_text("autonomous_command: " + behavior.prompt)
-                        # Reset silence timer
-                        self.last_automation_input = current_time
+                        try:
+                            await self.openai.send_text("autonomous_command: " + behavior.prompt)
+                            # Reset silence timer
+                            self.last_automation_input = current_time
+                        except websockets.exceptions.ConnectionClosedError:
+                            print("WebSocket disconnected during autonomous behavior, reconnecting...")
+                            # Will reconnect on next loop iteration
+                            pass
                         
                 await asyncio.sleep(1.0)  # Check every second
                 

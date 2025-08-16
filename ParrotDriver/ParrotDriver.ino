@@ -7,6 +7,7 @@
 #include <WebSocketsClient.h>
 #include <driver/i2s.h>
 #include <WiFiManager.h>
+#include <ESP32Servo.h>
 
 const char* wsHost = "192.168.1.174";
 const int wsPort = 8080;
@@ -17,20 +18,27 @@ const char* wsPathAudio = "/audio-stream";
 const int wsPortMic = 8002;
 const char* wsPathMic = "/microphone";
 
-const int MOUTH_PIN = 27;
-const int HEAD_TILT_PIN = 14;
-const int WING_PIN = 13;
-const int HEAD_ROTATION_PIN = 12;
+// Servo pins - Updated for new ESP32-S3 wiring
+const int MOUTH_PIN = 6;           // Was GPIO27
+const int HEAD_TILT_PIN = 5;       // Was GPIO14
+const int HEAD_ROTATION_PIN = 10;  // Was GPIO12, moved from GPIO4
+const int WING_PIN = 3;            // Was GPIO13
 
-// I2S Speaker pins
-const int I2S_BCLK = 18;
-const int I2S_LRC = 19;
-const int I2S_DOUT = 23;
+// I2S Speaker pins - Updated for new ESP32-S3 wiring
+const int I2S_BCLK = 42;           // Was GPIO18
+const int I2S_LRC = 41;            // Was GPIO19
+const int I2S_DOUT = 40;           // Was GPIO23 (DIN on amplifier)
 
-// I2S Microphone pins
-const int I2S_MIC_SCK = 16;
-const int I2S_MIC_WS = 17;
-const int I2S_MIC_SD = 21;
+// I2S Microphone pins - Updated for new ESP32-S3 wiring
+const int I2S_MIC_SCK = 15;        // Was GPIO16 (BCLK) - Alternative pin
+const int I2S_MIC_WS = 16;         // Was GPIO17 (LRCLK) - Alternative pin
+const int I2S_MIC_SD = 17;         // Was GPIO21 (Data) - Alternative pin
+
+// Status LED pins - Available GPIO on ESP32-S3
+const int LED_POWER = 11;          // Green - System powered on
+const int LED_SERVER = 12;         // Blue - Connected to server
+const int LED_MIC = 13;            // Yellow - Microphone detecting voice
+const int LED_SPEAKER = 14;        // Red - Audio playback active
 
 // I2S configuration
 const i2s_port_t I2S_PORT = I2S_NUM_0;
@@ -58,7 +66,7 @@ unsigned long wsTimeOfLastChar = 0;
 const unsigned long WIFI_CHECK_INTERVAL = 30000;
 
 // Add these constants at the top
-const int HEARTBEAT_INTERVAL = 15000; // 15 seconds
+const int HEARTBEAT_INTERVAL = 15000; // 15 seconds (back to original)
 const int HEARTBEAT_TIMEOUT = 3000;   // 3 seconds
 const int HEARTBEAT_RETRIES = 2;
 
@@ -91,6 +99,10 @@ bool is_speaking = false;
 
 // Add a timestamp for animation updates
 unsigned long last_animation_update = 0;
+
+// LED timing variables
+unsigned long mic_led_timer = 0;
+unsigned long speaker_led_timer = 0;
 
 // Add I2S configuration functions
 void configureI2S() {
@@ -198,10 +210,12 @@ void audioWebSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
     switch(type) {
         case WStype_CONNECTED:
             Serial.println("Audio WebSocket Connected");
+            digitalWrite(LED_SERVER, HIGH);  // Turn on server LED
             break;
             
         case WStype_DISCONNECTED:
             Serial.println("Audio WebSocket Disconnected");
+            digitalWrite(LED_SERVER, LOW);   // Turn off server LED
             break;
             
         case WStype_ERROR:
@@ -213,6 +227,10 @@ void audioWebSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
             
         case WStype_BIN:
             if (isConfigured) {
+                // Extend speaker LED timer instead of turning on immediately
+                speaker_led_timer = millis() + 500;  // Keep LED on for 500ms after last audio
+                digitalWrite(LED_SPEAKER, HIGH);  // Turn on speaker LED
+                
                 const size_t MAX_CHUNK = 512;
                 size_t processed = 0;
                 
@@ -222,6 +240,9 @@ void audioWebSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
                     
                     // Calculate animation for this chunk
                     calculateAnimationPositions(payload + processed, chunk_size);
+                    
+                    // Keep extending the LED timer as audio plays
+                    speaker_led_timer = millis() + 500;
                     
                     // Create stereo buffer and process audio as before
                     size_t stereo_length = chunk_size * 2;
@@ -249,6 +270,7 @@ void audioWebSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
                     }
                 }
                 is_speaking = false;
+                // Don't turn off LED immediately - let the timer handle it
             }
             break;
     }
@@ -273,7 +295,54 @@ void micWebSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
     }
 }
 
+// Global servo objects for direct control
+Servo mouthServo;
+Servo headTiltServo;  
+Servo headRotationServo;
+Servo wingServo;
+bool servosAttached = false;
+
+void attachServosForControl() {
+    if (!servosAttached) {
+        mouthServo.attach(MOUTH_PIN);
+        headTiltServo.attach(HEAD_TILT_PIN);
+        headRotationServo.attach(HEAD_ROTATION_PIN);
+        wingServo.attach(WING_PIN);
+        servosAttached = true;
+        Serial.println("Servos attached for direct control");
+    }
+}
+
+void testServos() {
+    Serial.println("\n=== TESTING SERVOS DIRECTLY ===");
+    Servo testServo;
+    
+    // Test each servo briefly
+    int pins[] = {MOUTH_PIN, HEAD_TILT_PIN, HEAD_ROTATION_PIN, WING_PIN};
+    const char* names[] = {"Mouth", "Head Tilt", "Head Rotation", "Wing"};
+    
+    for (int i = 0; i < 4; i++) {
+        Serial.print("Testing ");
+        Serial.print(names[i]);
+        Serial.print(" on GPIO");
+        Serial.println(pins[i]);
+        
+        testServo.attach(pins[i]);
+        testServo.writeMicroseconds(1500);  // Center
+        delay(300);
+        testServo.writeMicroseconds(1600);  // Small movement
+        delay(300);
+        testServo.writeMicroseconds(1500);  // Back to center
+        testServo.detach();
+        delay(200);
+    }
+    Serial.println("=== SERVO TEST COMPLETE ===\n");
+}
+
 void initializeServos() {
+    // Test servos first
+    testServos();
+    
     BottangoCore::effectorPool.dump();
     Callbacks::onThisControllerStarted();
 
@@ -286,7 +355,13 @@ void initializeServos() {
     };
     
     char cmdBuffer[MAX_COMMAND_LENGTH];  // Safe buffer for command processing
-    for (const String& cmd : commands) {
+    for (String cmd : commands) {
+        // Add hash for Bottango
+        int hash = 0;
+        for (int i = 0; i < cmd.length(); i++) {
+            hash += cmd.charAt(i);
+        }
+        cmd += ",h" + String(hash);
         Serial.println("Initializing: " + cmd);
         cmd.toCharArray(cmdBuffer, sizeof(cmdBuffer));
         BottangoCore::processWebSocketCommand(cmdBuffer);
@@ -381,10 +456,33 @@ void animation_loop() {
         return;
     
     last_animation_update = current_time;
+    
+    // Attach servos for direct control
+    attachServosForControl();
+    
+    // Debug: Check if we're running idle animation
+    static unsigned long lastDebugPrint = 0;
+    
     // Handle idle animations when not speaking
     if (!is_speaking) {
        updateIdleAnimation();
+       if (millis() - lastDebugPrint > 5000) {
+           Serial.println("Idle animation running - positions: Mouth=" + String(mouth_next_position) + 
+                         " Wing=" + String(wing_next_position) + 
+                         " Tilt=" + String(head_tilt_next_position) + 
+                         " Rot=" + String(head_rotation_next_position));
+           lastDebugPrint = millis();
+       }
     }
+    
+    // DIRECT SERVO CONTROL - bypass Bottango
+    // Map positions (0.0-1.0) to PWM values and write directly
+    mouthServo.writeMicroseconds(1450 + (int)(mouth_next_position * 250));  // 1450-1700
+    wingServo.writeMicroseconds(1500 + (int)(wing_next_position * 500));     // 1500-2000  
+    headTiltServo.writeMicroseconds(850 + (int)(head_tilt_next_position * 1250)); // 850-2100
+    headRotationServo.writeMicroseconds(1275 + (int)(head_rotation_next_position * 450)); // 1275-1725
+    
+    return; // Skip the Bottango command sending below
     char cmdBuffer[MAX_COMMAND_LENGTH];
     String command = "";
     // Update positions with smooth movements
@@ -392,7 +490,14 @@ void animation_loop() {
         mouth_current_position = mouth_next_position;
 
         command = "sCI," + String(MOUTH_PIN) + "," + String(mouth_current_position * 8192);
-        command.toCharArray(cmdBuffer, sizeof(cmdBuffer));        
+        // Add a simple hash to make Bottango accept the command
+        int hash = 0;
+        for (int i = 0; i < command.length(); i++) {
+            hash += command.charAt(i);
+        }
+        command += ",h" + String(hash);
+        command.toCharArray(cmdBuffer, sizeof(cmdBuffer));
+        Serial.println("Sending: " + command);  // Debug output
         BottangoCore::processWebSocketCommand(cmdBuffer);
     }
     
@@ -400,6 +505,10 @@ void animation_loop() {
         float delta = wing_next_position - wing_current_position;
         wing_current_position += delta * 0.3f;
         command = "sCI," + String(WING_PIN) + "," + String(wing_current_position * 8192);
+        // Add hash
+        int hash = 0;
+        for (int i = 0; i < command.length(); i++) hash += command.charAt(i);
+        command += ",h" + String(hash);
         command.toCharArray(cmdBuffer, sizeof(cmdBuffer));        
         BottangoCore::processWebSocketCommand(cmdBuffer);
     }
@@ -408,6 +517,10 @@ void animation_loop() {
         float delta = head_tilt_next_position - head_tilt_current_position;
         head_tilt_current_position += delta * 0.4f;
         command = "sCI," + String(HEAD_TILT_PIN) + "," + String(head_tilt_current_position * 8192);
+        // Add hash
+        int hash = 0;
+        for (int i = 0; i < command.length(); i++) hash += command.charAt(i);
+        command += ",h" + String(hash);
         command.toCharArray(cmdBuffer, sizeof(cmdBuffer));        
         BottangoCore::processWebSocketCommand(cmdBuffer);
     }
@@ -416,13 +529,70 @@ void animation_loop() {
         float delta = head_rotation_next_position - head_rotation_current_position;
         head_rotation_current_position += delta * 0.4f;
         command = "sCI," + String(HEAD_ROTATION_PIN) + "," + String(head_rotation_current_position * 8192);
+        // Add hash
+        int hash = 0;
+        for (int i = 0; i < command.length(); i++) hash += command.charAt(i);
+        command += ",h" + String(hash);
         command.toCharArray(cmdBuffer, sizeof(cmdBuffer));        
         BottangoCore::processWebSocketCommand(cmdBuffer);
     }
 }
 
+void testSpeaker() {
+    Serial.println("\n=== TESTING SPEAKER ===");
+    if (!isConfigured) {
+        Serial.println("I2S not configured, skipping speaker test");
+        return;
+    }
+    
+    // Generate a 1kHz beep for 500ms
+    const int freq = 1000;
+    const int duration = 500;
+    const int sampleRate = 24000;
+    const int numSamples = (sampleRate * duration) / 1000;
+    
+    int16_t* beepBuffer = (int16_t*)malloc(numSamples * 2 * sizeof(int16_t)); // Stereo
+    if (!beepBuffer) {
+        Serial.println("Failed to allocate beep buffer");
+        return;
+    }
+    
+    // Generate sine wave
+    for (int i = 0; i < numSamples; i++) {
+        int16_t sample = (int16_t)(5000 * sin(2.0 * PI * freq * i / sampleRate));
+        beepBuffer[i * 2] = sample;     // Left channel
+        beepBuffer[i * 2 + 1] = sample; // Right channel
+    }
+    
+    size_t bytes_written = 0;
+    esp_err_t err = i2s_write(I2S_PORT, beepBuffer, numSamples * 2 * sizeof(int16_t), &bytes_written, portMAX_DELAY);
+    
+    if (err == ESP_OK) {
+        Serial.println("Speaker test beep sent (" + String(bytes_written) + " bytes)");
+    } else {
+        Serial.println("Failed to send beep: " + String(err));
+    }
+    
+    free(beepBuffer);
+    Serial.println("=== SPEAKER TEST COMPLETE ===\n");
+}
+
 void setup() {
     Serial.begin(115200);
+    
+    // Initialize status LEDs
+    pinMode(LED_POWER, OUTPUT);
+    pinMode(LED_SERVER, OUTPUT);
+    pinMode(LED_MIC, OUTPUT);
+    pinMode(LED_SPEAKER, OUTPUT);
+    
+    // Turn on power LED immediately
+    digitalWrite(LED_POWER, HIGH);
+    
+    // Turn off other LEDs initially
+    digitalWrite(LED_SERVER, LOW);
+    digitalWrite(LED_MIC, LOW);
+    digitalWrite(LED_SPEAKER, LOW);
     
     // WiFi setup using WiFiManager
     WiFiManager wifiManager;
@@ -447,22 +617,28 @@ void setup() {
     
     Serial.println("WiFi connected");
     Serial.println("IP address: " + WiFi.localIP().toString());
+    Serial.println("Connecting to server at: " + String(wsHost) + ":" + String(wsPortAudio));
 
     // Configure I2S
     configureI2S();
     setupMicI2S();
+    
+    // Skip test speaker beep
+    // testSpeaker();
     
     // Initialize Bottango
     BottangoCore::bottangoSetup();
     initializeServos();
     
     // Audio WebSocket
+    Serial.println("Starting Audio WebSocket connection...");
     audioWebSocket.begin(wsHost, wsPortAudio, wsPathAudio);
     audioWebSocket.onEvent(audioWebSocketEvent);
     audioWebSocket.setReconnectInterval(5000);
     audioWebSocket.enableHeartbeat(HEARTBEAT_INTERVAL, HEARTBEAT_TIMEOUT, HEARTBEAT_RETRIES);
     
     // Microphone WebSocket
+    Serial.println("Starting Microphone WebSocket connection...");
     micWebSocket.begin(wsHost, wsPortMic, wsPathMic);
     micWebSocket.onEvent(micWebSocketEvent);
     micWebSocket.setReconnectInterval(5000);
@@ -498,6 +674,36 @@ void loop() {
     // Handle all WebSocket connections
     audioWebSocket.loop();
     micWebSocket.loop();
+    
+    // Turn off mic LED after timeout
+    if (mic_led_timer > 0 && millis() > mic_led_timer) {
+        digitalWrite(LED_MIC, LOW);
+        mic_led_timer = 0;
+    }
+    
+    // Turn off speaker LED after timeout
+    if (speaker_led_timer > 0 && millis() > speaker_led_timer) {
+        digitalWrite(LED_SPEAKER, LOW);
+        speaker_led_timer = 0;
+    }
+    
+    // Process Bottango commands
+    BottangoCore::bottangoLoop();
+    
+    // Run animation loop for idle movements
+    animation_loop();
+    
+    // Update Bottango effectors
+    if (BottangoCore::initialized) {
+        BottangoCore::effectorPool.updateAllDriveTargets();
+        delay(2); // Give servo library time to process
+    } else {
+        static unsigned long lastInitCheck = 0;
+        if (millis() - lastInitCheck > 5000) {
+            Serial.println("WARNING: BottangoCore not initialized!");
+            lastInitCheck = millis();
+        }
+    }
         
     // Handle microphone data with rate limiting
     static unsigned long lastMicRead = 0;
@@ -507,32 +713,52 @@ void loop() {
         size_t bytes_read = 0;
         esp_err_t result = i2s_read(I2S_MIC_PORT, micBuffer32, sizeof(micBuffer32), &bytes_read, 0);
         
+        // Debug info only when needed
+        static unsigned long lastMicDebug = 0;
+        if (millis() - lastMicDebug > 5000) {  // Every 5 seconds
+            // Serial.println("Mic read result: " + String(result) + " bytes: " + String(bytes_read));
+            lastMicDebug = millis();
+        }
+        
         if (result == ESP_OK && bytes_read > 0) {
+            // Debug: Check if we're getting any audio level
+            int32_t maxVal = 0;
+            int32_t minVal = 0;
+            for (int i = 0; i < bytes_read/4; i++) {
+                if (micBuffer32[i] > maxVal) maxVal = micBuffer32[i];
+                if (micBuffer32[i] < minVal) minVal = micBuffer32[i];
+            }
+            
+            // Only log if we have actual audio data
+            if (maxVal != 0 || minVal != 0) {
+                // Show the actual 32-bit range we're getting
+                Serial.println("Mic raw range: " + String(minVal) + " to " + String(maxVal) + 
+                              " (bytes: " + String(bytes_read) + ")");
+                
+                // Light up mic LED if detecting voice-level audio
+                // Typical voice is around 1-10 million in our 32-bit range
+                if (abs(maxVal) > 2000000 || abs(minVal) > 2000000) {
+                    digitalWrite(LED_MIC, HIGH);
+                    mic_led_timer = millis() + 100;  // Keep LED on for 100ms
+                }
+            } else {
+                digitalWrite(LED_MIC, LOW);  // No audio, turn off LED
+            }
+            
             // Convert 32-bit samples to 16-bit with proper scaling
             size_t sample_count = bytes_read / 4;  // 4 bytes per 32-bit sample
             
             for (size_t i = 0; i < sample_count; i++) {
-                // Get 32-bit sample and scale down to 16-bit with better gain
-                int32_t sample = micBuffer32[i] >> 8;  // Better scaling (was >>12)
+                // Get 32-bit sample and scale down to 16-bit
+                // The INMP441 outputs 24-bit data in 32-bit container, left-aligned
+                // So we need to shift right by 16 to get to 16-bit range
+                int32_t sample = micBuffer32[i] >> 14;  // Shift by 14 for some headroom
                 
-                // Apply moving average filter
-                filter_buffer[filter_index] = sample;
-                filter_index = (filter_index + 1) % FILTER_SIZE;
+                // Clip to 16-bit range
+                sample = constrain(sample, -32768, 32767);
                 
-                int32_t filtered_sample = 0;
-                for (int j = 0; j < FILTER_SIZE; j++) {
-                    filtered_sample += filter_buffer[j];
-                }
-                filtered_sample /= FILTER_SIZE;
-                
-                // Apply moderate gain after filtering
-                filtered_sample = (filtered_sample * 5) >> 3;  // 0.625x gain (reduced from 1.5x)
-                
-                // Clip to prevent distortion
-                filtered_sample = constrain(filtered_sample, -32768, 32767);
-                
-                // Store the filtered sample in the 16-bit buffer
-                micBuffer16[i] = (int16_t)filtered_sample;
+                // Store in the 16-bit buffer
+                micBuffer16[i] = (int16_t)sample;
             }
             
             // Send the 16-bit samples
