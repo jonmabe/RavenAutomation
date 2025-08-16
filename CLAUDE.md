@@ -35,19 +35,19 @@
 # Compile the sketch
 arduino-cli compile --fqbn esp32:esp32:esp32s3 ParrotDriver/
 
+# IMPORTANT: Always ask before uploading! User may be using the serial port.
 # Upload to ESP32 (make sure Arduino IDE is closed first!)
 arduino-cli upload -p /dev/cu.usbmodem5A4E1311211 --fqbn esp32:esp32:esp32s3 ParrotDriver/
 ```
 
 ### 2. Monitor Serial Output
-After deployment, always check the serial output to verify the device is working:
+**IMPORTANT: Never use `cat /dev/cu.usbmodem*` to monitor output - it produces garbled text.**
+**Always ask before monitoring - user may be using the serial port.**
 
+After deployment, to monitor serial output:
 ```bash
-# Option 1: Arduino CLI monitor (recommended)
+# Arduino CLI monitor (recommended)
 arduino-cli monitor -p /dev/cu.usbmodem5A4E1311211 -c baudrate=115200
-
-# Option 2: Direct cat (less reliable)
-cat /dev/cu.usbmodem5A4E1311211
 ```
 
 ### 3. Common Issues
