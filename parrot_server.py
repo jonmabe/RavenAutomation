@@ -164,6 +164,9 @@ class AudioClient:
         self.dc_offset = 0  # Will be calculated dynamically
         self.alpha = 0.95   # For DC offset estimation
         self.gain = 1.5     # Adjustable gain factor
+        
+        # Add connection lock to prevent concurrent OpenAI connections
+        self.openai_connection_lock = asyncio.Lock()
     
     @property
     def has_esp32_connected(self):
@@ -172,14 +175,20 @@ class AudioClient:
     
     async def manage_openai_connection(self):
         """Connect to OpenAI only when ESP32 is connected"""
-        if self.has_esp32_connected and self.openai.ws is None:
-            print("ESP32 connected, establishing OpenAI connection...")
-            await self.openai.connect()
-            print("Connected to OpenAI")
-        elif not self.has_esp32_connected and self.openai.ws is not None:
-            print("No ESP32 clients, closing OpenAI connection...")
-            await self.openai.disconnect()
-            print("Disconnected from OpenAI")
+        async with self.openai_connection_lock:
+            try:
+                if self.has_esp32_connected and self.openai.ws is None:
+                    print("ESP32 connected, establishing OpenAI connection...")
+                    await self.openai.connect()
+                    print("Connected to OpenAI")
+                elif not self.has_esp32_connected and self.openai.ws is not None:
+                    print("No ESP32 clients, closing OpenAI connection...")
+                    await self.openai.disconnect()
+                    print("Disconnected from OpenAI")
+            except Exception as e:
+                print(f"Error managing OpenAI connection: {e}")
+                # Reset the WebSocket to None in case of error
+                self.openai.ws = None
         
     def get_default_input_device(self):
         """Find the default input device index"""

@@ -21,8 +21,12 @@ class OpenAIProxy:
     async def disconnect(self):
         """Disconnect from OpenAI's WebSocket API"""
         if self.ws:
-            await self.ws.close()
-            self.ws = None
+            try:
+                await self.ws.close()
+            except Exception as e:
+                print(f"Error closing OpenAI WebSocket: {e}")
+            finally:
+                self.ws = None
             
     async def connect(self):
         """Connect to OpenAI's WebSocket API"""
