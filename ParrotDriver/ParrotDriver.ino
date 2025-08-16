@@ -735,11 +735,13 @@ void loop() {
                 Serial.println("Mic raw range: " + String(minVal) + " to " + String(maxVal) + 
                               " (bytes: " + String(bytes_read) + ")");
                 
-                // Light up mic LED if detecting voice-level audio
-                // Typical voice is around 1-10 million in our 32-bit range
-                if (abs(maxVal) > 2000000 || abs(minVal) > 2000000) {
+                // Light up mic LED only for voice-level audio
+                // Voice typically ranges from 5-50 million in our 32-bit range
+                // Background noise is usually under 3 million
+                long threshold = 5000000;  // Adjust this based on your mic sensitivity
+                if (abs(maxVal) > threshold || abs(minVal) > threshold) {
                     digitalWrite(LED_MIC, HIGH);
-                    mic_led_timer = millis() + 100;  // Keep LED on for 100ms
+                    mic_led_timer = millis() + 200;  // Keep LED on for 200ms for better visibility
                 }
             } else {
                 digitalWrite(LED_MIC, LOW);  // No audio, turn off LED

@@ -16,6 +16,7 @@ import wave
 from datetime import datetime
 import os
 from scipy import signal
+import argparse
 
 # Global configuration
 USE_WEBSOCKET_AUDIO = True  # Control whether to use websocket or local audio
@@ -117,13 +118,14 @@ class BehaviorManager:
         return None
 
 class AudioClient:
-    def __init__(self):
+    def __init__(self, save_recordings=False):
         # Audio configuration
         self.CHUNK = 960  # 40ms at 24kHz
         self.FORMAT = pyaudio.paInt16
         self.CHANNELS = 1
         self.RATE = 24000
         self.running = True
+        self.save_recordings = save_recordings
                 
         # State management
         self.is_recording = False
@@ -157,8 +159,14 @@ class AudioClient:
         # Add audio recording buffers
         self.current_audio_chunks = []
         self.recordings_dir = "mic_recordings"
-        self.save_recordings = False
         os.makedirs(self.recordings_dir, exist_ok=True)
+        
+        # Voice activity detection
+        self.voice_threshold = 1000  # Adjust based on your environment
+        self.silence_duration = 0
+        self.max_silence_duration = 1.5  # seconds of silence before saving
+        self.recording_active = False
+        self.last_voice_time = 0
         
         # Add audio processing parameters
         self.dc_offset = 0  # Will be calculated dynamically
@@ -172,6 +180,38 @@ class AudioClient:
     def has_esp32_connected(self):
         """Check if any ESP32 client is connected"""
         return len(self.active_audio_connections) > 0 or len(self.mic_connections) > 0
+    
+    def save_audio_recording(self, audio_chunks, prefix="recording"):
+        """Save audio chunks to a WAV file"""
+        if not audio_chunks or not self.save_recordings:
+            return
+            
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{prefix}_{timestamp}.wav"
+        filepath = os.path.join(self.recordings_dir, filename)
+        
+        # Combine all audio chunks
+        audio_data = b''.join(audio_chunks)
+        
+        # Save as WAV file
+        with wave.open(filepath, 'wb') as wf:
+            wf.setnchannels(self.CHANNELS)
+            wf.setsampwidth(2)  # 16-bit audio
+            wf.setframerate(self.RATE)
+            wf.writeframes(audio_data)
+        
+        print(f"Saved recording: {filename} ({len(audio_data)/self.RATE/2:.1f} seconds)")
+        return filepath
+    
+    def detect_voice_activity(self, audio_data):
+        """Detect if audio contains voice based on amplitude"""
+        # Convert bytes to numpy array
+        audio_array = np.frombuffer(audio_data, dtype=np.int16)
+        
+        # Calculate RMS (root mean square) for volume level
+        rms = np.sqrt(np.mean(audio_array.astype(np.float32) ** 2))
+        
+        return rms > self.voice_threshold
     
     async def manage_openai_connection(self):
         """Connect to OpenAI only when ESP32 is connected"""
@@ -244,11 +284,36 @@ class AudioClient:
                 while True:
                     try:
                         data = await websocket.receive_bytes()
-                        if not self.is_speaking:                         
-                            # Store the original audio chunk for WAV file
-                            self.current_audio_chunks.append(data)
+                        if not self.is_speaking:
+                            current_time = time.time()
                             
-                            # Send boosted audio to OpenAI
+                            # Check for voice activity
+                            has_voice = self.detect_voice_activity(data)
+                            
+                            if has_voice:
+                                # Voice detected
+                                if not self.recording_active:
+                                    self.recording_active = True
+                                    self.current_audio_chunks = []
+                                    print("Started recording (voice detected)")
+                                
+                                self.last_voice_time = current_time
+                                self.current_audio_chunks.append(data)
+                                
+                            elif self.recording_active:
+                                # No voice but still recording
+                                self.current_audio_chunks.append(data)
+                                
+                                # Check if silence duration exceeded
+                                silence_time = current_time - self.last_voice_time
+                                if silence_time > self.max_silence_duration:
+                                    # Save the recording
+                                    self.save_audio_recording(self.current_audio_chunks, "voice")
+                                    self.recording_active = False
+                                    self.current_audio_chunks = []
+                                    print("Stopped recording (silence detected)")
+                            
+                            # Send audio to OpenAI
                             await self.openai.send_audio(data)
                     except Exception as e:
                         print(f"Error in microphone websocket: {e}")
@@ -396,6 +461,12 @@ class AudioClient:
                 if "response.audio.delta" in response_type:
                     audio_base64 = response_data.get("delta", "")
                     if audio_base64:
+                        # Save any ongoing recording before parrot speaks
+                        if self.recording_active and self.current_audio_chunks:
+                            self.save_audio_recording(self.current_audio_chunks, "voice_before_response")
+                            self.recording_active = False
+                            self.current_audio_chunks = []
+                        
                         self.is_speaking = True
                         audio_data = base64.b64decode(audio_base64)
                         audio_length = len(audio_data)/self.RATE
@@ -542,9 +613,9 @@ class AudioClient:
 # Create FastAPI app for audio websocket
 audio_app = FastAPI()
 
-async def main():
+async def main(save_recordings=False):
     """Main entry point for the application"""
-    client = AudioClient()
+    client = AudioClient(save_recordings=save_recordings)
     
     try:
         await client.main_loop()
@@ -557,5 +628,14 @@ async def main():
         await client.cleanup()
 
 if __name__ == "__main__":
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Parrot Server')
+    parser.add_argument('--save-recordings', action='store_true',
+                        help='Save audio recordings when voice is detected')
+    args = parser.parse_args()
+    
+    if args.save_recordings:
+        print("Audio recording enabled - recordings will be saved to 'mic_recordings' directory")
+    
     # Run the main async function
-    asyncio.run(main()) 
+    asyncio.run(main(save_recordings=args.save_recordings)) 
