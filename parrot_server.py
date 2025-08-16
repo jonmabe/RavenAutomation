@@ -164,6 +164,22 @@ class AudioClient:
         self.dc_offset = 0  # Will be calculated dynamically
         self.alpha = 0.95   # For DC offset estimation
         self.gain = 1.5     # Adjustable gain factor
+    
+    @property
+    def has_esp32_connected(self):
+        """Check if any ESP32 client is connected"""
+        return len(self.active_audio_connections) > 0 or len(self.mic_connections) > 0
+    
+    async def manage_openai_connection(self):
+        """Connect to OpenAI only when ESP32 is connected"""
+        if self.has_esp32_connected and self.openai.ws is None:
+            print("ESP32 connected, establishing OpenAI connection...")
+            await self.openai.connect()
+            print("Connected to OpenAI")
+        elif not self.has_esp32_connected and self.openai.ws is not None:
+            print("No ESP32 clients, closing OpenAI connection...")
+            await self.openai.disconnect()
+            print("Disconnected from OpenAI")
         
     def get_default_input_device(self):
         """Find the default input device index"""
@@ -184,9 +200,10 @@ class AudioClient:
 
     async def setup(self):
         """Initialize all async components"""
-        # Connect to OpenAI
-        await self.openai.connect()
-        print("Connected to OpenAI")
+        # Don't connect to OpenAI immediately - wait for ESP32
+        print("Server started. Waiting for ESP32 connection...")
+        print(f"Audio WebSocket listening on port {AUDIO_WS_PORT}")
+        print(f"Microphone WebSocket listening on port {MICROPHONE_WS_PORT}")
         
         # Start the FastAPI server for audio WebSocket
         if USE_WEBSOCKET_AUDIO:
@@ -211,6 +228,9 @@ class AudioClient:
             self.mic_connections.add(websocket)
             print("ESP32 Microphone client connected")
             
+            # Connect to OpenAI when first ESP32 connects
+            await self.manage_openai_connection()
+            
             try:
                 while True:
                     try:
@@ -227,6 +247,10 @@ class AudioClient:
             finally:
                 self.mic_connections.remove(websocket)
                 print("ESP32 Microphone client disconnected")
+                
+                # Disconnect from OpenAI if no more clients
+                await self.manage_openai_connection()
+                
                 try:
                     await websocket.close()
                 except:
@@ -240,6 +264,9 @@ class AudioClient:
             self.active_audio_connections.add(websocket)
             print("ESP32 Audio client connected")
             
+            # Connect to OpenAI when first ESP32 connects
+            await self.manage_openai_connection()
+            
             try:
                 while True:
                     try:
@@ -252,6 +279,10 @@ class AudioClient:
             finally:
                 self.active_audio_connections.remove(websocket)
                 print("ESP32 Audio client disconnected")
+                
+                # Disconnect from OpenAI if no more clients
+                await self.manage_openai_connection()
+                
                 try:
                     await websocket.close()
                 except:
@@ -344,6 +375,11 @@ class AudioClient:
         """Receive and process audio from OpenAI"""
         try:
             while self.running:
+                # Only try to receive if connected to OpenAI
+                if self.openai.ws is None:
+                    await asyncio.sleep(1)
+                    continue
+                    
                 response = await self.openai.receive()
                 response_data = json.loads(response)
                 response_type = response_data.get("type", "")
@@ -444,7 +480,8 @@ class AudioClient:
         """Manage autonomous parrot behaviors during periods of silence"""
         try:
             while self.running:
-                if self.autonomous_mode and not self.is_speaking:
+                # Only run behaviors if ESP32 is connected
+                if self.autonomous_mode and not self.is_speaking and self.has_esp32_connected:
                     current_time = time.time()
                     silence_duration = current_time - self.last_automation_input
                     
@@ -460,6 +497,10 @@ class AudioClient:
                             print("WebSocket disconnected during autonomous behavior, reconnecting...")
                             # Will reconnect on next loop iteration
                             pass
+                elif not self.has_esp32_connected and self.autonomous_mode:
+                    # Log once when no client is connected
+                    await asyncio.sleep(5)  # Check less frequently when no client
+                    continue
                         
                 await asyncio.sleep(1.0)  # Check every second
                 

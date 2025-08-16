@@ -18,6 +18,12 @@ class OpenAIProxy:
     def __init__(self):
         self.ws = None
         
+    async def disconnect(self):
+        """Disconnect from OpenAI's WebSocket API"""
+        if self.ws:
+            await self.ws.close()
+            self.ws = None
+            
     async def connect(self):
         """Connect to OpenAI's WebSocket API"""
         headers = {
