@@ -319,8 +319,9 @@ class AudioClient:
                         print(f"Error in microphone websocket: {e}")
                         break
             finally:
-                self.mic_connections.remove(websocket)
-                print("ESP32 Microphone client disconnected")
+                if websocket in self.mic_connections:
+                    self.mic_connections.remove(websocket)
+                    print("ESP32 Microphone client disconnected")
                 
                 # Disconnect from OpenAI if no more clients
                 await self.manage_openai_connection()
@@ -344,15 +345,43 @@ class AudioClient:
             try:
                 while True:
                     try:
-                        await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+                        # Use receive() to handle any message type (text, bytes, or close)
+                        message = await asyncio.wait_for(websocket.receive(), timeout=30.0)
+                        
+                        # Check if it's a close message
+                        if "type" in message and message["type"] == "websocket.disconnect":
+                            print("ESP32 Audio client requested disconnect")
+                            break
+                            
+                        # Handle text messages (keepalive or status)
+                        if "text" in message:
+                            # Could be a keepalive ping, just continue
+                            continue
+                            
+                        # Handle binary messages if needed
+                        if "bytes" in message:
+                            # Process any binary data if needed
+                            continue
+                            
                     except asyncio.TimeoutError:
-                        continue
+                        # Send a ping to check if connection is still alive
+                        try:
+                            await websocket.send_text("ping")
+                        except:
+                            # Connection is dead, break out
+                            print("Audio websocket connection appears dead (ping failed)")
+                            break
+                    except websockets.exceptions.ConnectionClosed:
+                        print("Audio websocket connection closed")
+                        break
                     except Exception as e:
-                        print(f"Error in audio websocket: {e}")
+                        if str(e):  # Only print if there's an actual error message
+                            print(f"Error in audio websocket: {e}")
                         break
             finally:
-                self.active_audio_connections.remove(websocket)
-                print("ESP32 Audio client disconnected")
+                if websocket in self.active_audio_connections:
+                    self.active_audio_connections.remove(websocket)
+                    print("ESP32 Audio client disconnected")
                 
                 # Disconnect from OpenAI if no more clients
                 await self.manage_openai_connection()
@@ -534,23 +563,37 @@ class AudioClient:
             
             # Stream the audio data
             chunk_size = 1024  # Network chunks
+            dead_connections = set()
+            
             for i in range(0, len(audio_data), chunk_size):
                 chunk = audio_data[i:i + chunk_size]
                                 
                 # Create a copy of connections to avoid modification during iteration
-                clients = list(self.active_audio_connections)
+                clients = list(self.active_audio_connections - dead_connections)
                 
                 # Send to each client sequentially
                 for client in clients:
                     try:
                         await client.send_bytes(chunk)
+                    except websockets.exceptions.ConnectionClosed:
+                        print(f"Audio client connection closed during streaming")
+                        dead_connections.add(client)
                     except Exception as e:
-                        print(f"Error sending to client: {e}")
-                        if client in self.active_audio_connections:
-                            self.active_audio_connections.remove(client)
+                        if str(e) and "1006" not in str(e):  # Don't print abnormal closure errors
+                            print(f"Error sending audio to client: {e}")
+                        dead_connections.add(client)
                 
                 # Minimal delay to prevent overwhelming the connection
                 await asyncio.sleep(0.0005)
+            
+            # Remove dead connections after streaming
+            for conn in dead_connections:
+                if conn in self.active_audio_connections:
+                    self.active_audio_connections.remove(conn)
+                    try:
+                        await conn.close()
+                    except:
+                        pass
                 
         except Exception as e:
             print(f"Error in stream_to_speakers: {e}")

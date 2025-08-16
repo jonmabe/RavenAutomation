@@ -14,3 +14,4 @@ logs/
 __pycache__/
 mic_recordings/
 .vscode/
+ParrotDriver/build/

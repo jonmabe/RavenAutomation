@@ -6,7 +6,7 @@
 - **Servo Motors:**
   - Mouth: GPIO 6
   - Head Tilt: GPIO 5
-  - Head Rotation: GPIO 10 (moved from GPIO 4 which has issues on ESP32-S3)
+  - Head Rotation: GPIO 8 (moved from GPIO 10, then 9 due to pin conflicts)
   - Wing: GPIO 3
 
 - **Speaker I2S (MAX98357A Amplifier):**
@@ -86,7 +86,8 @@ On first boot or after reset:
 - **Servos not responding**: Check ground connection between ESP32 and Bottango boards
 - **Speaker no audio**: Ensure MAX98357A is connected to 3.3V, not 5V
 - **Microphone not working**: Verify INMP441 L/R pin is grounded for left channel
-- **GPIO 4 issues**: This pin doesn't work reliably on ESP32-S3, use GPIO 10 instead
+- **GPIO 4 issues**: This pin doesn't work reliably on ESP32-S3
+- **GPIO 10 issues**: If this pin has problems, use GPIO 9 as alternative
 
 ### LED Indicators
 - **No blue LED**: Server connection failed - check WiFi and server IP

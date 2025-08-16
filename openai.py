@@ -36,7 +36,7 @@ class OpenAIProxy:
         }
         
         self.ws = await websockets.connect(
-            "wss://api.openai.com/v1/realtime?protocol_version=2&model=gpt-4o-realtime-preview-2024-12-17",
+            "wss://api.openai.com/v1/realtime?protocol_version=2&model=gpt-4o-realtime-preview",
             additional_headers=headers
         )
         

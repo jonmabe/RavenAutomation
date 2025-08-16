@@ -21,7 +21,7 @@ const char* wsPathMic = "/microphone";
 // Servo pins - Updated for new ESP32-S3 wiring
 const int MOUTH_PIN = 6;           // Was GPIO27
 const int HEAD_TILT_PIN = 5;       // Was GPIO14
-const int HEAD_ROTATION_PIN = 10;  // Was GPIO12, moved from GPIO4
+const int HEAD_ROTATION_PIN = 8;   // Was GPIO12, moved from GPIO4 then GPIO10
 const int WING_PIN = 3;            // Was GPIO13
 
 // I2S Speaker pins - Updated for new ESP32-S3 wiring
@@ -223,6 +223,13 @@ void audioWebSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
             audioWebSocket.disconnect();
             delay(1000);
             audioWebSocket.begin(wsHost, wsPortAudio, wsPathAudio);
+            break;
+            
+        case WStype_TEXT:
+            // Handle text messages (like ping from server)
+            if (length > 0 && strncmp((char*)payload, "ping", 4) == 0) {
+                audioWebSocket.sendTXT("pong");
+            }
             break;
             
         case WStype_BIN:
