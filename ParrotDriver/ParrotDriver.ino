@@ -24,6 +24,16 @@ const int HEAD_TILT_PIN = 5;       // Was GPIO14
 const int HEAD_ROTATION_PIN = 8;   // Was GPIO12, moved from GPIO4 then GPIO10
 const int WING_PIN = 3;            // Was GPIO13
 
+// Servo safety limits (in microseconds) to prevent mechanical damage
+// Adjust these based on your servo's physical limits
+const int HEAD_ROTATION_MIN = 900;   // Safe minimum (was 1275)
+const int HEAD_ROTATION_MAX = 2100;  // Safe maximum (was 1725)
+const int HEAD_ROTATION_CENTER = 1500; // Center position
+
+// Position limits (0.0 to 1.0 normalized) for extra safety
+const float HEAD_ROTATION_MIN_POS = 0.2;  // Don't go below 20%
+const float HEAD_ROTATION_MAX_POS = 0.8;  // Don't go above 80%
+
 // I2S Speaker pins - Updated for new ESP32-S3 wiring
 const int I2S_BCLK = 42;           // Was GPIO18
 const int I2S_LRC = 41;            // Was GPIO19
@@ -313,10 +323,12 @@ void attachServosForControl() {
     if (!servosAttached) {
         mouthServo.attach(MOUTH_PIN);
         headTiltServo.attach(HEAD_TILT_PIN);
-        headRotationServo.attach(HEAD_ROTATION_PIN);
+        // Attach head rotation with safety limits
+        headRotationServo.attach(HEAD_ROTATION_PIN, HEAD_ROTATION_MIN, HEAD_ROTATION_MAX);
         wingServo.attach(WING_PIN);
         servosAttached = true;
-        Serial.println("Servos attached for direct control");
+        Serial.println("Servos attached - Head rotation limited to " + 
+                      String(HEAD_ROTATION_MIN) + "-" + String(HEAD_ROTATION_MAX) + "us for safety");
     }
 }
 
@@ -421,13 +433,15 @@ void calculateAnimationPositions(uint8_t* audio_data, size_t length) {
     float tilt_energy = smoothed_energy * 0.3f;
     head_tilt_next_position = 0.4f + tilt_energy * 0.6f;
     
-    // Head rotation - Add more dynamic movement during speech
-    float rotation_energy = smoothed_energy * 0.4f;  // Use audio energy for rotation
-    float rotation_random = random(-15, 15) / 100.0f;  // Add some randomness
+    // Head rotation - Add more dynamic movement during speech (with safety)
+    float rotation_energy = smoothed_energy * 0.3f;  // Reduced energy multiplier for safety
+    float rotation_random = random(-10, 10) / 100.0f;  // Reduced randomness for safety
     // Center position (0.5) plus energy-based movement and randomness
     head_rotation_next_position = 0.5f + (rotation_energy * rotation_random);
-    // Constrain to valid range
-    head_rotation_next_position = constrain(head_rotation_next_position, 0.2f, 0.8f);
+    // Constrain to safe operating range with extra margin
+    head_rotation_next_position = constrain(head_rotation_next_position, 
+                                           HEAD_ROTATION_MIN_POS + 0.05f, 
+                                           HEAD_ROTATION_MAX_POS - 0.05f);
 }
 
 void updateIdleAnimation() {
@@ -435,9 +449,10 @@ void updateIdleAnimation() {
     
     // Check if it's time for a new idle movement
     if (current_time - last_idle_time >= IDLE_INTERVAL + random(-IDLE_VARIANCE, IDLE_VARIANCE)) {
-        // Alternate head looking left and right
+        // Alternate head looking left and right (within safe limits)
         head_looking_left = !head_looking_left;
-        head_rotation_next_position = head_looking_left ? 0.3f : 0.7f;
+        // Use positions that respect our safety limits (35% to 65% instead of 30% to 70%)
+        head_rotation_next_position = head_looking_left ? 0.35f : 0.65f;
         
         // Random head tilt
         head_tilt_next_position = 0.5f + random(-15, 15) / 100.0f;
@@ -487,7 +502,18 @@ void animation_loop() {
     mouthServo.writeMicroseconds(1450 + (int)(mouth_next_position * 250));  // 1450-1700
     wingServo.writeMicroseconds(1500 + (int)(wing_next_position * 500));     // 1500-2000  
     headTiltServo.writeMicroseconds(850 + (int)(head_tilt_next_position * 1250)); // 850-2100
-    headRotationServo.writeMicroseconds(1275 + (int)(head_rotation_next_position * 450)); // 1275-1725
+    
+    // Head rotation with safety limits
+    // First constrain the position to safe range
+    float safe_rotation = constrain(head_rotation_next_position, 
+                                   HEAD_ROTATION_MIN_POS, 
+                                   HEAD_ROTATION_MAX_POS);
+    // Then map to PWM range with safety limits
+    int rotationPWM = HEAD_ROTATION_MIN + 
+                     (int)(safe_rotation * (HEAD_ROTATION_MAX - HEAD_ROTATION_MIN));
+    // Final safety check
+    rotationPWM = constrain(rotationPWM, HEAD_ROTATION_MIN, HEAD_ROTATION_MAX);
+    headRotationServo.writeMicroseconds(rotationPWM);
     
     return; // Skip the Bottango command sending below
     char cmdBuffer[MAX_COMMAND_LENGTH];
