@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Arduino/ESP32 files
+ParrotDriver/
+DirectServoTest/
+SafeServoTest/
+ServoDiagnostic/
+ServoTest/
+*.ino
+*.jpg
+*.pdf
+
+# Documentation
+README.md
+VAPI_SETUP.md
+CLAUDE.md
+
+# Captain
+captain-definition

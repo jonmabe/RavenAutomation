@@ -1,0 +1,24 @@
+services:
+  parrot-server:
+    build: .
+    ports:
+      - "8080:8080"    # Control WebSocket
+      - "8001:8001"    # Audio Stream WebSocket  
+      - "8002:8002"    # Microphone WebSocket
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_VOICE=${OPENAI_VOICE:-ballad}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-realtime-preview-2024-12-17}
+      - VOICE_BACKEND=${VOICE_BACKEND:-openai}
+      - VAPI_API_KEY=${VAPI_API_KEY}
+      - VAPI_PUBLIC_KEY=${VAPI_PUBLIC_KEY}
+      - VAPI_ASSISTANT_ID=${VAPI_ASSISTANT_ID}
+    volumes:
+      - ./.env:/app/.env:ro
+    restart: unless-stopped
+    networks:
+      - parrot-network
+
+networks:
+  parrot-network:
+    driver: bridge
