@@ -355,7 +355,14 @@ class AudioClient:
                             
                         # Handle text messages (keepalive or status)
                         if "text" in message:
-                            # Could be a keepalive ping, just continue
+                            text_msg = message["text"]
+                            if text_msg == "pong":
+                                # Response to our ping
+                                continue
+                            elif text_msg == "buffer_ok":
+                                # ESP32 signaling it's keeping up - could use this for adaptive streaming
+                                continue
+                            # Could be other keepalive messages
                             continue
                             
                         # Handle binary messages if needed

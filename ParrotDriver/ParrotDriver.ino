@@ -244,6 +244,13 @@ void audioWebSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
             
         case WStype_BIN:
             if (isConfigured) {
+                // Simple flow control - if we're behind, send a status message
+                static unsigned long last_status_send = 0;
+                if (millis() - last_status_send > 100) {  // Send status every 100ms max
+                    audioWebSocket.sendTXT("buffer_ok");
+                    last_status_send = millis();
+                }
+                
                 // Extend speaker LED timer instead of turning on immediately
                 speaker_led_timer = millis() + 500;  // Keep LED on for 500ms after last audio
                 digitalWrite(LED_SPEAKER, HIGH);  // Turn on speaker LED
