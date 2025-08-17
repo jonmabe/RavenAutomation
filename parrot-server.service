@@ -1,0 +1,15 @@
+[Unit]
+Description=Parrot Server Docker Container
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/parrot-server
+ExecStart=/usr/bin/docker start parrot-server
+ExecStop=/usr/bin/docker stop parrot-server
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target

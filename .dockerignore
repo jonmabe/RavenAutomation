@@ -59,5 +59,7 @@ README.md
 VAPI_SETUP.md
 CLAUDE.md
 
-# Captain
-captain-definition
+# Deployment files
+DEBIAN_DEPLOYMENT.md
+deploy.sh
+parrot-server.service

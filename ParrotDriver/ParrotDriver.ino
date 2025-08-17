@@ -10,7 +10,7 @@
 #include <ESP32Servo.h>
 
 // CapRover deployment - replace with your actual CapRover domain/IP
-const char* wsHost = "parrot-server.your-domain.com";  // Replace with your CapRover domain or IP
+const char* wsHost = "192.168.1.172";  // Your CapRover server IP
 const int wsPort = 8080;
 
 // Audio WebSocket settings
