@@ -114,6 +114,10 @@ unsigned long last_animation_update = 0;
 unsigned long mic_led_timer = 0;
 unsigned long speaker_led_timer = 0;
 
+// Pre-allocated buffer for stereo audio conversion (avoid malloc during playback)
+uint8_t* stereo_audio_buffer = nullptr;
+const size_t STEREO_BUFFER_SIZE = 8192;  // Large enough for max audio chunks
+
 // Add I2S configuration functions
 void configureI2S() {
     const uint32_t SAMPLE_RATE = 24000;
@@ -268,24 +272,23 @@ void audioWebSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
                     // Keep extending the LED timer as audio plays
                     speaker_led_timer = millis() + 500;
                     
-                    // Create stereo buffer and process audio as before
+                    // Create stereo buffer using pre-allocated memory
                     size_t stereo_length = chunk_size * 2;
-                    uint8_t* stereo_buffer = (uint8_t*)malloc(stereo_length);
                     
-                    if (stereo_buffer) {
+                    // Safety check - make sure we don't exceed buffer size
+                    if (stereo_length <= STEREO_BUFFER_SIZE && stereo_audio_buffer) {
                         // Duplicate mono data to both channels
                         for (size_t i = 0; i < chunk_size; i += 2) {
                             // Copy sample to left channel
-                            stereo_buffer[i*2] = payload[processed + i];
-                            stereo_buffer[i*2 + 1] = payload[processed + i + 1];
+                            stereo_audio_buffer[i*2] = payload[processed + i];
+                            stereo_audio_buffer[i*2 + 1] = payload[processed + i + 1];
                             // Copy same sample to right channel
-                            stereo_buffer[i*2 + 2] = payload[processed + i];
-                            stereo_buffer[i*2 + 3] = payload[processed + i + 1];
+                            stereo_audio_buffer[i*2 + 2] = payload[processed + i];
+                            stereo_audio_buffer[i*2 + 3] = payload[processed + i + 1];
                         }
                         
                         size_t bytes_written = 0;
-                        i2s_write(I2S_PORT, stereo_buffer, stereo_length, &bytes_written, portMAX_DELAY);
-                        free(stereo_buffer);
+                        i2s_write(I2S_PORT, stereo_audio_buffer, stereo_length, &bytes_written, portMAX_DELAY);
                     }
                     
                     processed += chunk_size;
@@ -665,6 +668,16 @@ void setup() {
     
     // Skip test speaker beep
     // testSpeaker();
+    
+    // Allocate stereo audio buffer
+    stereo_audio_buffer = (uint8_t*)malloc(STEREO_BUFFER_SIZE);
+    if (!stereo_audio_buffer) {
+        Serial.println("ERROR: Failed to allocate stereo audio buffer!");
+        delay(5000);
+        ESP.restart();
+    } else {
+        Serial.println("Stereo audio buffer allocated: " + String(STEREO_BUFFER_SIZE) + " bytes");
+    }
     
     // Initialize Bottango
     BottangoCore::bottangoSetup();

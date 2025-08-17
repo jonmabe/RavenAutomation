@@ -346,7 +346,7 @@ class AudioClient:
                 while True:
                     try:
                         # Use receive() to handle any message type (text, bytes, or close)
-                        message = await asyncio.wait_for(websocket.receive(), timeout=30.0)
+                        message = await asyncio.wait_for(websocket.receive(), timeout=5.0)
                         
                         # Check if it's a close message
                         if "type" in message and message["type"] == "websocket.disconnect":
