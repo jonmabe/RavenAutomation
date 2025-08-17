@@ -97,7 +97,6 @@ float head_tilt_current_position = 0.0;
 float head_rotation_next_position = 0.0;
 float head_rotation_current_position = 0.0;
 float last_energy = 0.0;
-bool head_looking_left = true;
 unsigned long last_idle_time = 0;
 
 const uint8_t HEAD_SIDE = 0;
@@ -459,27 +458,75 @@ void calculateAnimationPositions(uint8_t* audio_data, size_t length) {
 void updateIdleAnimation() {
     unsigned long current_time = millis();
     
-    // Check if it's time for a new idle movement
-    if (current_time - last_idle_time >= IDLE_INTERVAL + random(-IDLE_VARIANCE, IDLE_VARIANCE)) {
-        // Alternate head looking left and right (within safe limits)
-        head_looking_left = !head_looking_left;
-        // Use positions that respect our safety limits (35% to 65% instead of 30% to 70%)
-        head_rotation_next_position = head_looking_left ? 0.35f : 0.65f;
+    // Different movement types with different intervals for natural bird behavior
+    static unsigned long last_small_movement = 0;
+    static unsigned long last_medium_movement = 0; 
+    static unsigned long last_large_movement = 0;
+    static unsigned long last_wing_adjustment = 0;
+    
+    // Small frequent adjustments (800-2500ms) - like bird micro-movements
+    if (current_time - last_small_movement >= random(800, 2500)) {
+        // Small head tilt adjustments
+        float tilt_adjustment = random(-5, 5) / 100.0f;
+        head_tilt_next_position += tilt_adjustment;
+        head_tilt_next_position = constrain(head_tilt_next_position, 0.3f, 0.7f);
         
-        // Random head tilt
-        head_tilt_next_position = 0.5f + random(-15, 15) / 100.0f;
-        
-        // Occasional wing movement
-        if (random(100) < 30) {  // 30% chance
-            wing_next_position = random(20, 40) / 100.0f;
-        } else {
-            wing_next_position = 0.0f;
+        // Occasional small wing twitch
+        if (random(100) < 25) {  // 25% chance for wing twitch (reduced from 40%)
+            wing_next_position = random(8, 20) / 100.0f;
         }
         
-        // Mouth stays mostly closed
-        mouth_next_position = random(0, 10) / 100.0f;
+        last_small_movement = current_time;
+    }
+    
+    // Medium movements (3000-8000ms) - casual looking around
+    if (current_time - last_medium_movement >= random(3000, 8000)) {
+        // Random head rotation - conservative range to protect servo
+        head_rotation_next_position = random(35, 65) / 100.0f;  // Safe range well within limits
         
-        last_idle_time = current_time;
+        // Sometimes coordinate head tilt with rotation for natural posture
+        if (random(100) < 40) {  // 40% chance to adjust tilt too (reduced from 50%)
+            head_tilt_next_position = 0.35f + random(0, 30) / 100.0f;
+        }
+        
+        // Medium wing movements
+        if (random(100) < 25) {  // 25% chance for wing movement (reduced from 35%)
+            wing_next_position = random(10, 30) / 100.0f;
+        }
+        
+        last_medium_movement = current_time;
+    }
+    
+    // Large attention/alert movements (15000-25000ms)
+    if (current_time - last_large_movement >= random(15000, 25000)) {
+        // "Alert" behavior - bird notices something, quick coordinated movement
+        head_rotation_next_position = random(30, 70) / 100.0f;  // Conservative range for safety
+        head_tilt_next_position = 0.3f + random(0, 35) / 100.0f;
+        
+        // Wings often react to alert behavior
+        if (random(100) < 50) {  // 50% chance for wing response (reduced from 70%)
+            wing_next_position = random(20, 40) / 100.0f;
+        }
+        
+        last_large_movement = current_time;
+    }
+    
+    // Wing adjustments (1500-4000ms) - birds adjust wings constantly but more calmly
+    if (current_time - last_wing_adjustment >= random(1500, 4000)) {
+        if (random(100) < 40) {  // 40% chance to adjust wing position (reduced from 60%)
+            // Sometimes subtle adjustments, sometimes more noticeable
+            wing_next_position = random(0, 25) / 100.0f;
+        } else {
+            // Fold wings back to resting position
+            wing_next_position = random(0, 10) / 100.0f;
+        }
+        
+        last_wing_adjustment = current_time;
+    }
+    
+    // Mouth movements - very occasional like real birds
+    if (random(1000) < 8) {  // 0.8% chance for small mouth movement
+        mouth_next_position = random(0, 18) / 100.0f;
     }
 }
 
