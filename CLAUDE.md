@@ -1,101 +1,101 @@
-# CLAUDE.md
+# RavenAutomation ESP32 Deployment Guide
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## ESP32-S3 Pin Configuration
 
-## Project Overview
+### Current Pin Mappings
+- **Servo Motors:**
+  - Mouth: GPIO 6
+  - Head Tilt: GPIO 5
+  - Head Rotation: GPIO 8 (moved from GPIO 10, then 9 due to pin conflicts)
+  - Wing: GPIO 3
 
-RavenAutomation is an AI-powered animatronic parrot that combines:
-- **Python server** (FastAPI) for AI interaction and audio processing
-- **ESP32 microcontroller** (Arduino/C++) for hardware control
-- **OpenAI real-time API** for conversational AI
+- **Speaker I2S (MAX98357A Amplifier):**
+  - BCLK: GPIO 42
+  - LRC: GPIO 41
+  - DOUT: GPIO 40
+  - Power: 3.3V (NOT 5V - important!)
 
-## Development Setup
+- **Microphone I2S (INMP441):**
+  - SCK (BCLK): GPIO 15 (alternative pins if issues)
+  - WS (LRCLK): GPIO 16
+  - SD (Data): GPIO 17
+  - L/R: GND (for left channel)
+  - Power: 3.3V
 
-### Python Environment
+- **Status LEDs:**
+  - Power (Green): GPIO 11 - Always on when powered
+  - Server (Blue): GPIO 12 - On when connected to WebSocket
+  - Microphone (Yellow): GPIO 13 - Flashes when detecting voice
+  - Speaker (Red): GPIO 14 - On during audio playback
+
+## Deployment Workflow
+
+### 1. Compile and Upload
 ```bash
-# Activate virtual environment
-source venv/bin/activate  # On macOS/Linux
-# or
-venv\Scripts\activate  # On Windows
+# Compile the sketch
+arduino-cli compile --fqbn esp32:esp32:esp32s3 ParrotDriver/
 
-# Install dependencies
-pip install -r requirements.txt
-
-# Create .env file with API keys
-cp .env.example .env
-# Edit .env to add your API keys and select backend
+# IMPORTANT: Always ask before uploading! User may be using the serial port.
+# Upload to ESP32 (make sure Arduino IDE is closed first!)
+arduino-cli upload -p /dev/cu.usbmodem5A4E1311211 --fqbn esp32:esp32:esp32s3 ParrotDriver/
 ```
 
-### Running the Server
+### 2. Monitor Serial Output
+**IMPORTANT: Never use `cat /dev/cu.usbmodem*` to monitor output - it produces garbled text.**
+**Always ask before monitoring - user may be using the serial port.**
+
+After deployment, to monitor serial output:
 ```bash
-# Start the main Python server
-python parrot_server.py
+# Arduino CLI monitor (recommended)
+arduino-cli monitor -p /dev/cu.usbmodem5A4E1311211 -c baudrate=115200
 ```
 
-The server runs multiple services:
-- Port 8080: Main WebSocket server
-- Port 8001: Audio output endpoint
-- Port 8002: Microphone input endpoint
+### 3. Common Issues
+- **Port busy error**: Close Arduino IDE or any serial monitors before uploading
+- **Upload fails**: Unplug and replug the ESP32, then retry
+- **No serial output**: Check baud rate is set to 115200
 
-### ESP32 Development
-- Use Arduino IDE with ESP32 board support
-- Required libraries: WebSocketsClient, WiFiManager, ESP32Servo
-- Main sketch: `/ParrotDriver/ParrotDriver.ino`
-- Upload to ESP32 board via USB
+## Testing Features
 
-## Architecture
+On boot, the device:
+1. **Servo Test**: Each servo briefly moves to verify connections
+2. **LED Test**: All status LEDs initialize (power LED stays on)
+3. **Idle Animation**: Natural movements including:
+   - Head rotation (looking left/right)
+   - Head tilt variations
+   - Occasional wing movements
+   - Runs continuously when not actively speaking
 
-### Server Architecture (Python)
-- **parrot_server.py**: Main server orchestrating all components
-  - WebSocket endpoints for ESP32 communication
-  - Audio streaming management
-  - Behavior pattern control
-- **Voice Backend System**:
-  - **voice_backend.py**: Abstract base class for voice providers
-  - **openai_backend.py**: OpenAI Realtime API implementation
-  - **vapi_backend.py**: VAPI.ai integration (supports multiple TTS providers)
-  - **voice_factory.py**: Factory for creating backend instances
-  - **config.py**: Configuration management for backends
-- **openai.py**: Legacy OpenAI WebSocket proxy (being phased out)
-- **mic_processor.py**: Audio input processing
-  - Voice activity detection (VAD)
-  - Audio format conversion
+## Server Configuration
+- Server IP: 192.168.1.174
+- WebSocket Ports:
+  - Control: 8080
+  - Audio Stream: 8001
+  - Microphone: 8002
 
-### ESP32 Architecture
-- **ParrotDriver.ino**: Main controller
-  - WebSocket client connecting to Python server
-  - Servo control (4 servos: mouth, head tilt, wing, head rotation)
-  - I2S audio input/output
-- **Bottango library** in `/src/`: Animation framework
-  - Smooth servo movements
-  - Pre-programmed animation sequences
+## WiFi Setup
+On first boot or after reset:
+1. Connect to "ParrotConfig-XXXX" WiFi network (XXXX is device specific)
+2. Open browser to 192.168.4.1
+3. Enter home WiFi credentials
+4. Device will save credentials and auto-connect on future boots
 
-### Key Communication Flow
-1. ESP32 connects to Python server via WebSocket
-2. Microphone audio → ESP32 → Python server → OpenAI
-3. OpenAI response → Python server → ESP32 → Speaker
-4. Server sends servo commands based on speech/behavior
+## Troubleshooting
 
-## Important Considerations
+### Hardware Issues
+- **Servos not responding**: Check ground connection between ESP32 and Bottango boards
+- **Speaker no audio**: Ensure MAX98357A is connected to 3.3V, not 5V
+- **Microphone not working**: Verify INMP441 L/R pin is grounded for left channel
+- **GPIO 4 issues**: This pin doesn't work reliably on ESP32-S3
+- **GPIO 10 issues**: If this pin has problems, use GPIO 9 as alternative
 
-### Hardware Pins (ESP32)
-- Servo pins: 13 (mouth), 27 (head tilt), 4 (wing), 16 (head rotation)
-- I2S Speaker: BCLK=25, LRC=26, DIN=22
-- I2S Microphone: SCK=14, WS=15, SD=32
+### LED Indicators
+- **No blue LED**: Server connection failed - check WiFi and server IP
+- **Yellow LED not flashing**: Microphone not detecting audio - check wiring
+- **Red LED stuck on**: Audio playback issue - restart device
 
-### Network Configuration
-- ESP32 uses WiFiManager for initial setup
-- Access point mode if no saved network
-- WebSocket reconnection handled automatically
-
-### Audio Processing
-- 16kHz sample rate for all audio
-- PCM format for OpenAI compatibility
-- Voice activity detection prevents constant streaming
-
-### No Test Framework
-Currently no automated tests. Manual testing required for:
-- WebSocket connectivity
-- Audio streaming
-- Servo movements
-- AI responses
+### Direct Servo Control
+The system now uses direct PWM control instead of Bottango commands for reliability:
+- Servos are controlled directly via ESP32Servo library
+- Idle animations run independently of server connection
+- More stable and responsive than Bottango protocol

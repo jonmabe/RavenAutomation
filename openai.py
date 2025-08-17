@@ -18,6 +18,16 @@ class OpenAIProxy:
     def __init__(self):
         self.ws = None
         
+    async def disconnect(self):
+        """Disconnect from OpenAI's WebSocket API"""
+        if self.ws:
+            try:
+                await self.ws.close()
+            except Exception as e:
+                print(f"Error closing OpenAI WebSocket: {e}")
+            finally:
+                self.ws = None
+            
     async def connect(self):
         """Connect to OpenAI's WebSocket API"""
         headers = {
@@ -26,7 +36,7 @@ class OpenAIProxy:
         }
         
         self.ws = await websockets.connect(
-            "wss://api.openai.com/v1/realtime?protocol_version=2&model=gpt-4o-realtime-preview-2024-12-17",
+            "wss://api.openai.com/v1/realtime?protocol_version=2&model=gpt-4o-realtime-preview",
             additional_headers=headers
         )
         

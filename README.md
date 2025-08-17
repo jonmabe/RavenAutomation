@@ -1,6 +1,6 @@
 # AI Animatronic Parrot
 
-An interactive animatronic parrot that uses AI to engage in natural conversations and display lifelike movements. The system combines ESP32-based hardware control with a flexible voice backend system (supporting OpenAI and VAPI.ai) to create a responsive and engaging robotic companion.
+An interactive animatronic parrot that uses AI to engage in natural conversations and display lifelike movements. The system combines ESP32-based hardware control with OpenAI's API to create a responsive and engaging robotic companion.
 
 ## Overview
 
@@ -11,9 +11,7 @@ The project consists of two main components:
 ## Features
 
 ### Voice Interaction
-- Real-time conversation with multiple backend support:
-  - OpenAI Realtime API (native integration)
-  - VAPI.ai (supports ElevenLabs, OpenAI, PlayHT voices)
+- Real-time conversation using OpenAI's API
 - Natural speech synthesis
 - Microphone input processing
 - WebSocket-based audio streaming
@@ -61,15 +59,7 @@ pip install -r requirements.txt
 ### 2. Environment Configuration
 Create a `.env` file in the project root:
 ```
-# Voice Backend Selection (openai or vapi)
-VOICE_BACKEND=openai
-
-# For OpenAI backend
 OPENAI_API_KEY=your_api_key_here
-
-# For VAPI backend (see VAPI_SETUP.md for details)
-VAPI_API_KEY=your_vapi_api_key_here
-VAPI_ASSISTANT_ID=your_assistant_id_here
 ```
 
 ### 3. ESP32 Setup
