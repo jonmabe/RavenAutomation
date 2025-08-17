@@ -67,7 +67,16 @@ On boot, the device:
    - Runs continuously when not actively speaking
 
 ## Server Configuration
-- Server IP: 192.168.1.174
+
+### CapRover Deployment (Production)
+- Server Domain: parrot-server.your-domain.com (replace with actual domain/IP)
+- WebSocket URLs:
+  - Control: ws://parrot-server.your-domain.com:8080/
+  - Audio Stream: ws://parrot-server.your-domain.com:8001/audio-stream
+  - Microphone: ws://parrot-server.your-domain.com:8002/microphone
+
+### Local Development
+- Server IP: 192.168.1.174 (or local IP)
 - WebSocket Ports:
   - Control: 8080
   - Audio Stream: 8001

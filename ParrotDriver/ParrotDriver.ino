@@ -9,7 +9,8 @@
 #include <WiFiManager.h>
 #include <ESP32Servo.h>
 
-const char* wsHost = "192.168.1.174";
+// CapRover deployment - replace with your actual CapRover domain/IP
+const char* wsHost = "parrot-server.your-domain.com";  // Replace with your CapRover domain or IP
 const int wsPort = 8080;
 
 // Audio WebSocket settings
