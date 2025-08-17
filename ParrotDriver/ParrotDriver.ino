@@ -118,6 +118,7 @@ unsigned long speaker_led_timer = 0;
 uint8_t* stereo_audio_buffer = nullptr;
 const size_t STEREO_BUFFER_SIZE = 8192;  // Large enough for max audio chunks
 
+
 // Add I2S configuration functions
 void configureI2S() {
     const uint32_t SAMPLE_RATE = 24000;
@@ -287,6 +288,7 @@ void audioWebSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
                             stereo_audio_buffer[i*2 + 3] = payload[processed + i + 1];
                         }
                         
+                        // Direct I2S write
                         size_t bytes_written = 0;
                         i2s_write(I2S_PORT, stereo_audio_buffer, stereo_length, &bytes_written, portMAX_DELAY);
                     }
@@ -678,6 +680,7 @@ void setup() {
     } else {
         Serial.println("Stereo audio buffer allocated: " + String(STEREO_BUFFER_SIZE) + " bytes");
     }
+    
     
     // Initialize Bottango
     BottangoCore::bottangoSetup();
