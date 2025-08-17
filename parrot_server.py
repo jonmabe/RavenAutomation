@@ -562,7 +562,7 @@ class AudioClient:
                 self.audio_end_time += audio_duration
             
             # Stream the audio data
-            chunk_size = 1024  # Network chunks
+            chunk_size = 4096  # Larger network chunks for better efficiency
             dead_connections = set()
             
             for i in range(0, len(audio_data), chunk_size):
@@ -583,8 +583,8 @@ class AudioClient:
                             print(f"Error sending audio to client: {e}")
                         dead_connections.add(client)
                 
-                # Minimal delay to prevent overwhelming the connection
-                await asyncio.sleep(0.0005)
+                # Slightly longer delay for larger chunks
+                await asyncio.sleep(0.001)
             
             # Remove dead connections after streaming
             for conn in dead_connections:
