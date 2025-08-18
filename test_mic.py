@@ -5,8 +5,8 @@ import struct
 import numpy as np
 
 async def test_microphone():
-    # CapRover server IP
-    uri = "ws://192.168.1.172:8002/microphone"
+    # Server IP
+    uri = "ws://192.168.1.111:8002/microphone"
     try:
         async with websockets.connect(uri) as websocket:
             print("Connected to ESP32 microphone WebSocket")
