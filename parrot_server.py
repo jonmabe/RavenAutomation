@@ -37,56 +37,25 @@ class BehaviorManager:
     def __init__(self):
         self.behaviors: List[ParrotBehavior] = [
             ParrotBehavior(
-                name="whistle",
-                prompt="/whistle",
-                frequency=0.7,
-                min_silence=5.0
-            ),
-            ParrotBehavior(
                 name="squawk",
-                prompt="/squawk",
-                frequency=0.7,
-                min_silence=5.0
+                prompt="Make a squawk sound",
+                frequency=0.8,
+                min_silence=30.0,  # Wait 30 seconds of silence before eligible
+                cooldown=180.0  # Don't squawk more than once per 3 minutes
             ),
             ParrotBehavior(
-                name="sing",
-                prompt="Sing a very short snippet of a sea shanty.",
-                frequency=0.4,
-                min_silence=20.0,
-                cooldown=180.0
-            ),
-            ParrotBehavior(
-                name="cracker",
-                prompt="Ask for a cracker in a creative or funny way.",
-                frequency=0.3,
-                min_silence=10.0
-            ),
-            ParrotBehavior(
-                name="story",
-                prompt="Offer to tell a very short story about your adventures as a pirate parrot.",
-                frequency=0.4,
-                min_silence=15.0,
-                cooldown=120.0
-            ),
-            ParrotBehavior(
-                name="joke",
-                prompt="Offer to tell a short bird or pirate related joke.",
-                frequency=0.5,
-                min_silence=12.0,
-                cooldown=60.0
-            ),
-            ParrotBehavior(
-                name="observation",
-                prompt="Make a cheeky observation about the room or the situation.",
+                name="chirp",
+                prompt="Make a short chirp or tweet sound",
                 frequency=0.6,
-                min_silence=8.0
+                min_silence=45.0,  # Wait 45 seconds of silence before eligible
+                cooldown=300.0  # Don't chirp more than once per 5 minutes
             )
         ]
         
         
         self.last_interaction = time.time()
-        self.base_probability = 0.2  # Base chance of any behavior triggering
-        self.max_silence = 30.0  # Probability increases after this much silence
+        self.base_probability = 0.15  # Base chance of any behavior triggering (reduced from 0.2)
+        self.max_silence = 39.0  # Probability increases after this much silence (30% longer, was 30.0)
 
     def should_trigger_behavior(self, silence_duration: float) -> Optional[ParrotBehavior]:
         current_time = time.time()
