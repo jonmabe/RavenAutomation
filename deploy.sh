@@ -11,7 +11,7 @@ echo "=================================="
 # Configuration
 CONTAINER_NAME="parrot-server"
 IMAGE_NAME="parrot-server"
-HOST_IP="192.168.1.172"
+HOST_IP="192.168.1.111"
 
 # Colors for output
 RED='\033[0;31m'

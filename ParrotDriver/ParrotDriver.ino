@@ -9,8 +9,8 @@
 #include <WiFiManager.h>
 #include <ESP32Servo.h>
 
-// CapRover deployment - replace with your actual CapRover domain/IP
-const char* wsHost = "192.168.1.172";  // Your CapRover server IP
+// Server IP
+const char* wsHost = "192.168.1.111";  // Server IP
 const int wsPort = 8080;
 
 // Audio WebSocket settings
@@ -278,14 +278,22 @@ void audioWebSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
                     
                     // Safety check - make sure we don't exceed buffer size
                     if (stereo_length <= STEREO_BUFFER_SIZE && stereo_audio_buffer) {
-                        // Duplicate mono data to both channels
+                        // Duplicate mono data to both channels with 2x volume gain
                         for (size_t i = 0; i < chunk_size; i += 2) {
-                            // Copy sample to left channel
-                            stereo_audio_buffer[i*2] = payload[processed + i];
-                            stereo_audio_buffer[i*2 + 1] = payload[processed + i + 1];
-                            // Copy same sample to right channel
-                            stereo_audio_buffer[i*2 + 2] = payload[processed + i];
-                            stereo_audio_buffer[i*2 + 3] = payload[processed + i + 1];
+                            // Apply 2x gain and clamp to prevent distortion
+                            int16_t sample_left = ((int16_t*)payload)[processed/2 + i/2] * 2;
+                            int16_t sample_right = sample_left;  // Mono to stereo
+                            
+                            // Clamp to 16-bit range to prevent overflow distortion
+                            sample_left = constrain(sample_left, -32768, 32767);
+                            sample_right = constrain(sample_right, -32768, 32767);
+                            
+                            // Copy amplified sample to left channel
+                            stereo_audio_buffer[i*2] = sample_left & 0xFF;
+                            stereo_audio_buffer[i*2 + 1] = (sample_left >> 8) & 0xFF;
+                            // Copy same amplified sample to right channel
+                            stereo_audio_buffer[i*2 + 2] = sample_right & 0xFF;
+                            stereo_audio_buffer[i*2 + 3] = (sample_right >> 8) & 0xFF;
                         }
                         
                         // Direct I2S write

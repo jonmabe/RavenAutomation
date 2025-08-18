@@ -8,7 +8,7 @@ echo "=========================================="
 echo ""
 
 # Server details
-SERVER_IP="192.168.1.172"
+SERVER_IP="192.168.1.111"
 SERVER_DOMAIN="parrot-server.your-domain.com"  # Replace with actual domain if available
 
 echo "🖥️  Server IP: $SERVER_IP"
